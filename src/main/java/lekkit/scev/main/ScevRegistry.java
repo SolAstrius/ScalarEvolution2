@@ -161,9 +161,9 @@ public final class ScevRegistry {
     // Components
     //
 
-    public static final DeferredItem<CpuItem> CPU1 = ITEMS.register("cpu1", () -> new CpuItem(singleProps(), 1));
-    public static final DeferredItem<CpuItem> CPU2 = ITEMS.register("cpu2", () -> new CpuItem(singleProps(), 2));
-    public static final DeferredItem<CpuItem> CPU3 = ITEMS.register("cpu3", () -> new CpuItem(singleProps(), 3));
+    public static final DeferredItem<CpuItem> CPU1 = ITEMS.register("cpu1", () -> new CpuItem(singleProps(), 1, 1));
+    public static final DeferredItem<CpuItem> CPU2 = ITEMS.register("cpu2", () -> new CpuItem(singleProps(), 2, 2));
+    public static final DeferredItem<CpuItem> CPU3 = ITEMS.register("cpu3", () -> new CpuItem(singleProps(), 3, 4));
 
     public static final DeferredItem<RamItem> RAM_SODIMM1 = ITEMS.register("ram_sodimm1", () -> new RamItem(singleProps(), 0));
     public static final DeferredItem<RamItem> RAM_SODIMM2 = ITEMS.register("ram_sodimm2", () -> new RamItem(singleProps(), 1));

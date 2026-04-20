@@ -84,7 +84,7 @@ class MachineSpecParserTest {
     }
 
     @Test
-    @DisplayName("CPU level -> SMP count, clamped to 1 minimum")
+    @DisplayName("CPU tier -> SMP count, 1/2/4 progression")
     void cpuLevelMapsToSmp() {
         for (int level = 1; level <= 3; level++) {
             var cpu = switch (level) {
@@ -92,11 +92,16 @@ class MachineSpecParserTest {
                 case 2 -> ScevRegistry.CPU2.get();
                 default -> ScevRegistry.CPU3.get();
             };
+            int expectedSmp = switch (level) {
+                case 1 -> 1;
+                case 2 -> 2;
+                default -> 4;
+            };
             ItemStack mbStack = new ItemStack(ScevRegistry.MOTHERBOARD3.get());
             new MotherboardInventory(() -> mbStack).setItem(MotherboardItem.SLOT_CPU, new ItemStack(cpu));
             MachineSpec spec = MachineSpecParser.fromMotherboard(UUID.randomUUID(), mbStack, false);
             assertNotNull(spec);
-            assertEquals(level, spec.smp(), "CPU level " + level);
+            assertEquals(expectedSmp, spec.smp(), "CPU level " + level);
         }
     }
 

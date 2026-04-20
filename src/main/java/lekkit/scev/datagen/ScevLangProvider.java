@@ -25,6 +25,7 @@ public class ScevLangProvider extends LanguageProvider {
         add("container.scev.machine", "Machine");
 
         add("text.scev.capacity", "Capacity");
+        add("text.scev.cores", "Cores");
         add("text.scev.ram_slots", "Memory slots");
         add("text.scev.pci_slots", "PCI Expansion slots");
         add("text.scev.m2_slots", "M.2 (NGFF) slots");
@@ -52,7 +53,7 @@ public class ScevLangProvider extends LanguageProvider {
         addItem(ScevRegistry.MEMORY_CHIP,        "Memory Chip");
         addItem(ScevRegistry.CHAR_DISPLAY,       "Character Display");
         addItem(ScevRegistry.GFX_DISPLAY,        "Graphics Display");
-        addItem(ScevRegistry.SOC,                "System on a Chip (SoC)");
+        addItem(ScevRegistry.SOC,                "Integrated SE-1 SoC");
         addItem(ScevRegistry.SOLDERING_IRON,     "Pinecil Soldering Iron");
 
         addItem(ScevRegistry.FLASH_CHIP,         "Flash ROM Chip");
@@ -64,9 +65,9 @@ public class ScevLangProvider extends LanguageProvider {
         addItem(ScevRegistry.SOUND_CARD,         "Sound Card");
         addItem(ScevRegistry.RTL8169,            "RailTek RTL8169 Network Card");
 
-        addItem(ScevRegistry.CPU1,               "CPU (Tier 1)");
-        addItem(ScevRegistry.CPU2,               "CPU (Tier 2)");
-        addItem(ScevRegistry.CPU3,               "CPU (Tier 3)");
+        addItem(ScevRegistry.CPU1,               "SE-1 Veteran");
+        addItem(ScevRegistry.CPU2,               "SE-2 Core");
+        addItem(ScevRegistry.CPU3,               "SE-4 Elite");
         addItem(ScevRegistry.RAM_SODIMM1,        "Memory Stick (8 MiB)");
         addItem(ScevRegistry.RAM_SODIMM2,        "Memory Stick (16 MiB)");
         addItem(ScevRegistry.RAM_SODIMM3,        "Memory Stick (32 MiB)");

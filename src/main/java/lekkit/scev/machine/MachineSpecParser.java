@@ -180,7 +180,7 @@ public final class MachineSpecParser {
         // -- CPU --------------------------------------------------------------
         int smp = 1;
         ItemStack cpuStack = comps.get(MotherboardItem.SLOT_CPU);
-        if (cpuStack.getItem() instanceof CpuItem ci) smp = Math.max(1, ci.getLevel());
+        if (cpuStack.getItem() instanceof CpuItem ci) smp = ci.getHartCount();
 
         MachineSpec.Builder builder = MachineSpec.builder(machineUuid)
                 .memMb(totalMb)
