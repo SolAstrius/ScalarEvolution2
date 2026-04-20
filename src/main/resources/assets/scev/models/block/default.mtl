@@ -1,0 +1,13 @@
+# Shared material library for every scev OBJ block model.
+#
+# The diffuse colour map uses the `#texture` slot reference. Each block's
+# generated JSON model binds its own PNG to that slot, so all seven OBJs
+# share this single MTL file while drawing their own texture.
+#
+# Rationale: NeoForge's ObjModel silently drops every face whose mesh has no
+# material attached (ObjModel.java line 541-543 — `if (mat == null) return;`).
+# Stripping `mtllib`/`usemtl` during preprocessing makes the block render as
+# invisible geometry. Giving each face a named material with a `#slot`
+# reference is the fix. See docs/GOTCHAS.md for the full story.
+newmtl main
+map_Kd #texture

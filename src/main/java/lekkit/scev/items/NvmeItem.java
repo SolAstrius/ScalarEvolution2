@@ -1,0 +1,12 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ */
+package lekkit.scev.items;
+
+public class NvmeItem extends StorageItem {
+    public NvmeItem(Properties props) {
+        super(props, "rootfs.ext2", 2048);
+    }
+}

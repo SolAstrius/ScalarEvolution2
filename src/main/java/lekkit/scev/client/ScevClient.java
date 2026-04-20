@@ -1,0 +1,55 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ */
+package lekkit.scev.client;
+
+import lekkit.scev.server.MachineManager;
+import net.minecraft.client.Minecraft;
+import net.neoforged.fml.event.lifecycle.FMLClientSetupEvent;
+import net.neoforged.neoforge.client.event.ClientTickEvent;
+import net.neoforged.neoforge.common.NeoForge;
+
+/**
+ * Client-only setup hooks.
+ *
+ * <p>Also hosts the game-pause hook: in single-player, when the pause screen
+ * opens, {@link MachineManager#pauseAllMachines()} stops all running
+ * machines' worker threads until the screen is dismissed. This prevents
+ * machines from continuing to tick while the player has the game "paused",
+ * which would be surprising.
+ *
+ * <p>Multiplayer has no true pause, so this hook is a no-op on dedicated
+ * clients. Integrated server ticks freeze when the game pauses but native
+ * RVVM worker threads don't — they need the explicit pause.
+ */
+public final class ScevClient {
+    private static boolean lastPaused = false;
+
+    private ScevClient() {}
+
+    public static void onClientSetup(FMLClientSetupEvent e) {
+        // Register the per-tick pause watcher. Using the game bus (not the
+        // mod bus) because ClientTickEvent fires on the game bus.
+        NeoForge.EVENT_BUS.addListener(ScevClient::onClientTick);
+    }
+
+    private static void onClientTick(ClientTickEvent.Post e) {
+        Minecraft mc = Minecraft.getInstance();
+        // Only meaningful when the integrated server is running — on a
+        // dedicated client, pausing doesn't stop the remote server anyway.
+        if (mc.hasSingleplayerServer()) {
+            boolean paused = mc.isPaused();
+            if (paused != lastPaused) {
+                lastPaused = paused;
+                if (paused) MachineManager.pauseAllMachines();
+                else MachineManager.unpauseAllMachines();
+            }
+        } else if (lastPaused) {
+            // Left single-player while "paused" — normalise the tracked state.
+            MachineManager.unpauseAllMachines();
+            lastPaused = false;
+        }
+    }
+}

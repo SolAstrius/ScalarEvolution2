@@ -1,0 +1,147 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+env:
+  NEO_VERSION: "21.1.209"
+  RVVM_REF: "staging"
+
+jobs:
+  # ---------------------------------------------------------------------
+  # Build librvvm with JNI bindings for every target platform. The build
+  # job below downloads these artifacts and places them under
+  # src/main/resources/natives/<classifier>/ before running Gradle.
+  # ---------------------------------------------------------------------
+  natives-linux-x64:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: LekKit/RVVM
+          ref: ${{ env.RVVM_REF }}
+          path: RVVM
+      - name: Build librvvm.so (linux-x86_64)
+        run: cd RVVM && make lib USE_JNI=1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: librvvm-linux-x86_64
+          path: RVVM/release.linux.x86_64/librvvm.so
+
+  natives-macos-arm64:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: LekKit/RVVM
+          ref: ${{ env.RVVM_REF }}
+          path: RVVM
+      - name: Build librvvm.dylib (macos-aarch64)
+        run: cd RVVM && make lib USE_JNI=1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: librvvm-macos-aarch64
+          path: RVVM/release.darwin.arm64/librvvm.dylib
+
+  natives-windows-x64:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: LekKit/RVVM
+          ref: ${{ env.RVVM_REF }}
+          path: RVVM
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          install: mingw-w64-x86_64-gcc make
+      - name: Build librvvm.dll (windows-x86_64)
+        shell: msys2 {0}
+        run: |
+          cd RVVM
+          make lib USE_JNI=1
+          ls -la release.windows.x86_64/
+          # RVVM's Makefile emits librvvm.dll (MinGW convention) but the JVM's
+          # System.mapLibraryName("rvvm") on Windows returns rvvm.dll (no lib
+          # prefix). Rename so NativeLoader finds the bundled native at runtime.
+          cp release.windows.x86_64/librvvm.dll release.windows.x86_64/rvvm.dll
+      - uses: actions/upload-artifact@v4
+        with:
+          name: librvvm-windows-x86_64
+          path: RVVM/release.windows.x86_64/rvvm.dll
+
+  # ---------------------------------------------------------------------
+  # Main build + test job.
+  # ---------------------------------------------------------------------
+  build:
+    needs: [natives-linux-x64, natives-macos-arm64, natives-windows-x64]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Download Linux native
+        uses: actions/download-artifact@v4
+        with:
+          name: librvvm-linux-x86_64
+          path: src/main/resources/natives/linux-x86_64
+      - name: Download macOS native
+        uses: actions/download-artifact@v4
+        with:
+          name: librvvm-macos-aarch64
+          path: src/main/resources/natives/macos-aarch64
+      - name: Download Windows native
+        uses: actions/download-artifact@v4
+        with:
+          name: librvvm-windows-x86_64
+          path: src/main/resources/natives/windows-x86_64
+
+      - name: List bundled natives
+        run: find src/main/resources/natives -type f
+
+      - name: Datagen
+        run: ./gradlew runData --stacktrace
+
+      - name: Unit tests
+        run: ./gradlew test --stacktrace
+
+      - name: Build
+        run: ./gradlew build -x test --stacktrace
+
+      - name: GameTests
+        run: ./gradlew runGameTestServer --stacktrace
+
+      - name: Upload unit test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-report
+          path: build/reports/tests/test/
+          if-no-files-found: ignore
+
+      - name: Upload GameTest report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gametest-report
+          path: build/reports/tests/runGameTestServer/
+          if-no-files-found: ignore
+
+      - name: Upload mod jar
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mod-jar
+          path: build/libs/*.jar
