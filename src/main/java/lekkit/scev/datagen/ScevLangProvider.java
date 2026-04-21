@@ -56,6 +56,23 @@ public class ScevLangProvider extends LanguageProvider {
         add("button.scev.power", "Power");
         add("tooltip.scev.power", "Toggle machine power");
 
+        // Jade HUD labels. Shown as "<label>: <value>" per row; keep them
+        // short so they don't dominate a lookat-tooltip at a glance.
+        add("jade.scev.power",            "Power");
+        add("jade.scev.no_motherboard",   "No motherboard");
+        add("jade.scev.no_soc",           "No SoC installed");
+        add("jade.scev.no_flash",         "No firmware flash");
+        add("jade.scev.motherboard_tier", "Motherboard tier");
+        add("jade.scev.cpu",              "CPU");
+        add("jade.scev.soc",              "SoC");
+        add("jade.scev.ram",              "RAM");
+        add("jade.scev.storage",          "Storage");
+        add("jade.scev.pci_cards",        "PCI cards");
+        add("jade.scev.firmware",         "Firmware");
+        add("jade.scev.gpio",             "GPIO");
+        add("jade.scev.linked_to",        "Linked to");
+        add("jade.scev.not_linked",       "Not linked to any machine");
+
         // Power-on preflight failure messages. Shown as the action-bar
         // overlay when the player clicks Power but a required component is
         // missing; paired with a red button flash + error beep.

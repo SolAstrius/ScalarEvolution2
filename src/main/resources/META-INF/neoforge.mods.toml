@@ -25,6 +25,16 @@ logoFile="icon.png"
     ordering="NONE"
     side="BOTH"
 
+# Jade (Snownee) — optional HUD tooltip integration. Compat classes under
+# lekkit.scev.compat.jade are only loaded when Jade scans the @WailaPlugin
+# annotation, so the mod's absence is safe at runtime.
+[[dependencies.${mod_id}]]
+    modId="jade"
+    type="optional"
+    versionRange="[15,)"
+    ordering="NONE"
+    side="CLIENT"
+
 # Mixin config: creative tab section-banner injections live here.
 # Client-side only — banners are pure UI decoration and the server never
 # builds the creative-tab item list.
