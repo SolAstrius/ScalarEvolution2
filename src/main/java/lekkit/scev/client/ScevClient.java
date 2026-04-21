@@ -5,10 +5,12 @@
  */
 package lekkit.scev.client;
 
+import lekkit.scev.client.sections.ScevSectionManager;
 import lekkit.scev.server.MachineManager;
 import net.minecraft.client.Minecraft;
 import net.neoforged.fml.event.lifecycle.FMLClientSetupEvent;
 import net.neoforged.neoforge.client.event.ClientTickEvent;
+import net.neoforged.neoforge.client.event.RegisterClientReloadListenersEvent;
 import net.neoforged.neoforge.common.NeoForge;
 
 /**
@@ -33,6 +35,12 @@ public final class ScevClient {
         // Register the per-tick pause watcher. Using the game bus (not the
         // mod bus) because ClientTickEvent fires on the game bus.
         NeoForge.EVENT_BUS.addListener(ScevClient::onClientTick);
+    }
+
+    public static void onRegisterReloadListeners(RegisterClientReloadListenersEvent e) {
+        // Creative-tab section definitions live in resource packs. Reloads
+        // on /reload and on world enter.
+        e.registerReloadListener(ScevSectionManager.instance());
     }
 
     private static void onClientTick(ClientTickEvent.Post e) {

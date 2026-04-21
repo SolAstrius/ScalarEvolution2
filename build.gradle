@@ -102,6 +102,129 @@ test {
 // Native libraries live under src/main/resources/natives/<classifier>/ so they're on
 // the classpath in dev AND bundled into the shipped jar automatically (no extra
 // `jar.from` stanza needed).
+//
+// CI builds one native per target platform in parallel matrix jobs and downloads
+// them into src/main/resources/natives/ before running `./gradlew build`. Local
+// dev builds use `buildRvvmNative` below, which compiles librvvm for the host
+// platform only — same invocation as CI (`make lib USE_JNI=1`). Cross-platform
+// natives are a CI-only story; a local `./gradlew runClient` only needs the
+// host OS's library.
+
+ext.rvvmRef        = 'staging'
+ext.rvvmSrcDir     = file("${buildDir}/rvvm-src")
+ext.rvvmUpstream   = 'https://github.com/LekKit/RVVM.git'
+
+/** Host OS / arch detection mirroring RVVM's output directory naming. */
+ext.rvvmHostTriple = {
+    String osn  = System.getProperty('os.name').toLowerCase()
+    String arch = System.getProperty('os.arch').toLowerCase()
+    String norm = arch == 'amd64' ? 'x86_64' : arch == 'aarch64' ? 'arm64' : arch
+    if (osn.contains('linux'))       return "linux.${norm}"
+    if (osn.contains('mac'))         return "darwin.${norm}"
+    if (osn.contains('windows'))     return "windows.${norm}"
+    throw new GradleException("Unsupported host OS: ${osn}")
+}
+
+/** Corresponding subdir under src/main/resources/natives/ — matches what NativeLoader expects. */
+ext.rvvmClassifier = {
+    String osn  = System.getProperty('os.name').toLowerCase()
+    String arch = System.getProperty('os.arch').toLowerCase()
+    String norm = arch == 'amd64' ? 'x86_64' : arch == 'aarch64' ? 'aarch64' : arch
+    if (osn.contains('linux'))       return "linux-${norm}"
+    if (osn.contains('mac'))         return "macos-${norm}"
+    if (osn.contains('windows'))     return "windows-${norm}"
+    throw new GradleException("Unsupported host OS: ${osn}")
+}
+
+ext.rvvmLibName = {
+    String osn = System.getProperty('os.name').toLowerCase()
+    if (osn.contains('mac'))     return 'librvvm.dylib'
+    if (osn.contains('windows')) return 'rvvm.dll'
+    return 'librvvm.so'
+}
+
+/**
+ * Clone or update the upstream RVVM source tree to {@code build/rvvm-src} at
+ * the configured ref. Idempotent; does a fresh fetch + hard-reset each run to
+ * keep the local checkout aligned with the remote ref (which moves).
+ */
+tasks.register('fetchRvvmSrc') {
+    group = 'native'
+    description = "Clone or update LekKit/RVVM@${rvvmRef} under build/rvvm-src"
+    // Intentionally NOT declaring outputs.dir: Gradle pre-creates declared
+    // output directories, which would make the fresh-vs-update check below
+    // always take the "update" branch on the first run — `git fetch` into a
+    // non-repo dir fails. Keep the task input-tracked on just rvvmRef.
+    inputs.property('rvvmRef', rvvmRef)
+
+    doLast {
+        def gitDir = new File(rvvmSrcDir, '.git')
+        if (!gitDir.exists()) {
+            rvvmSrcDir.parentFile.mkdirs()
+            if (rvvmSrcDir.exists()) {
+                // Directory present but not a git checkout (e.g. Gradle created
+                // it from a previous outputs.dir declaration). Blow it away so
+                // `git clone` doesn't error with "destination already exists".
+                delete rvvmSrcDir
+            }
+            exec {
+                commandLine 'git', 'clone', '--depth', '1', '-b', rvvmRef,
+                        rvvmUpstream, rvvmSrcDir.absolutePath
+            }
+        } else {
+            exec { workingDir rvvmSrcDir; commandLine 'git', 'fetch', '--depth', '1', 'origin', rvvmRef }
+            exec { workingDir rvvmSrcDir; commandLine 'git', 'reset', '--hard', "origin/${rvvmRef}" }
+        }
+    }
+}
+
+/**
+ * Build librvvm.{so,dylib,dll} for the host platform by running RVVM's
+ * Makefile target {@code lib USE_JNI=1}, then copy the artifact into
+ * src/main/resources/natives/<classifier>/. No-op if the library already
+ * exists at the destination (so `./gradlew build` is incremental).
+ *
+ * <p>Windows: requires a POSIX-ish shell (MSYS2/MinGW) on PATH. The CI
+ * Windows job uses msys2/setup-msys2@v2 — local Windows devs will need a
+ * similar setup or should prefer running dev builds inside WSL.
+ */
+tasks.register('buildRvvmNative') {
+    group = 'native'
+    description = 'Compile librvvm for the host platform and drop into src/main/resources/natives/'
+    dependsOn 'fetchRvvmSrc'
+
+    def destDir  = file("src/main/resources/natives/${rvvmClassifier()}")
+    def destFile = new File(destDir, rvvmLibName())
+    outputs.file destFile
+    // Re-run if the upstream ref has moved, even if destFile is already present.
+    inputs.property('rvvmRef', rvvmRef)
+
+    doLast {
+        def built = new File(rvvmSrcDir, "release.${rvvmHostTriple()}/${rvvmLibName()}")
+
+        if (!built.exists()) {
+            logger.lifecycle("Building librvvm via RVVM's Makefile (target: lib USE_JNI=1)...")
+            exec {
+                workingDir rvvmSrcDir
+                commandLine 'make', 'lib', 'USE_JNI=1', "-j${Runtime.runtime.availableProcessors()}"
+            }
+        }
+
+        if (!built.exists()) {
+            throw new GradleException("RVVM build did not produce ${built} — check `make lib USE_JNI=1` output above")
+        }
+
+        destDir.mkdirs()
+        destFile.bytes = built.bytes
+        logger.lifecycle("Installed ${destFile.name} -> ${destDir}")
+    }
+}
+
+// Tie the native build into the normal resource-processing pipeline so
+// `./gradlew build` (or `./gradlew runClient`) implicitly pulls in the
+// host's librvvm. Skippable via `-x buildRvvmNative` when iterating on
+// Java-only changes.
+processResources.dependsOn 'buildRvvmNative'
 
 idea {
     module {

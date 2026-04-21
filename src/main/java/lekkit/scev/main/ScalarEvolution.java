@@ -48,6 +48,7 @@ public final class ScalarEvolution {
         // Client-only
         if (net.neoforged.fml.loading.FMLEnvironment.dist == Dist.CLIENT) {
             modBus.addListener(ScevClient::onClientSetup);
+            modBus.addListener(ScevClient::onRegisterReloadListeners);
             modBus.addListener(ScevRenderers::registerBlockEntityRenderers);
             modBus.addListener(ScevRenderers::registerMenuScreens);
         }

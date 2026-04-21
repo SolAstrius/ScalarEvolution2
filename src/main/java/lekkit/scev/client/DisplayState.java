@@ -64,6 +64,18 @@ public class DisplayState {
     public int getHeight() { return height; }
     public boolean isLocal() { return localMachine != null; }
 
+    /**
+     * @return true if this is a singleplayer DisplayState whose backing
+     *         {@link MachineState} has been destroyed (VM was powered off).
+     *         The cache entry is dead; {@link DisplayManager#get} evicts
+     *         stale entries before returning so the next lookup can
+     *         construct a fresh DisplayState against the new MachineState
+     *         (or return null if no VM is currently running for the UUID).
+     */
+    public boolean isStale() {
+        return isLocal() && !localMachine.isValid();
+    }
+
     synchronized void updateRemoteBuffer(byte[] src) {
         if (remoteBuffer == null || src.length != remoteBuffer.length) return;
         System.arraycopy(src, 0, remoteBuffer, 0, src.length);
@@ -93,12 +105,30 @@ public class DisplayState {
         ByteBuffer src;
         if (isLocal()) {
             FramebufferView fb = localMachine.getDisplay();
-            if (fb == null) return;
+            if (fb == null) {
+                // VM was torn down (power-off, chunk-unload free-all, etc).
+                // Paint the texture black so the last frame from the old VM
+                // doesn't linger on screen — stale DisplayStates are evicted
+                // from DisplayManager on the next get() anyway, but a
+                // mid-frame clear avoids the "screen shows prior boot" flash
+                // when the user re-opens the MachineScreen.
+                clearPixels();
+                return;
+            }
             src = fb.pixels();
         } else {
             src = ByteBuffer.wrap(remoteBuffer);
         }
         PixelConverter.bgraToRgba(src, image, width, height);
+    }
+
+    /** Zero every pixel in the NativeImage (opaque black). */
+    private void clearPixels() {
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
+                image.setPixelRGBA(x, y, 0xFF000000);
+            }
+        }
     }
 
     public synchronized void destroy() {

@@ -24,6 +24,19 @@ public final class DisplayManager {
 
     public static synchronized DisplayState get(UUID uuid) {
         DisplayState s = DISPLAYS.get(uuid);
+
+        // Evict stale singleplayer cache entries: the referenced MachineState
+        // was destroyed (power-off) but this cache still holds a DisplayState
+        // pointing at the dead backend. Without eviction, the next lookup
+        // would keep returning the stale entry and the client would show the
+        // old VM's final frame indefinitely — including across a subsequent
+        // power-on that would have built a fresh MachineState.
+        if (s != null && s.isStale()) {
+            DISPLAYS.remove(uuid);
+            s.destroy();
+            s = null;
+        }
+
         if (OPTIMIZE_SINGLEPLAYER && s == null) {
             MachineState ms = MachineManager.getMachineState(uuid);
             if (ms != null && ms.getDisplay() != null) {
@@ -58,8 +71,33 @@ public final class DisplayManager {
         DISPLAYS.clear();
     }
 
-    /** Called by the network handler when a {@link DisplayPayload} arrives. */
+    /**
+     * Called by the network handler when a {@link DisplayPayload} arrives.
+     *
+     * <p>Two sentinel semantics:
+     * <ul>
+     *   <li>{@code width == 0 || height == 0} → dispose the cached DisplayState
+     *       for this UUID. The server emits this on power-off / VM teardown so
+     *       the client stops rendering the last frame.</li>
+     *   <li>Otherwise → create or resize the cached DisplayState and copy in
+     *       the fresh pixels.</li>
+     * </ul>
+     *
+     * <p>Short-circuit: when {@link #OPTIMIZE_SINGLEPLAYER} is in effect and
+     * a live {@link MachineState} is registered locally for this UUID, skip
+     * the remote buffer entirely — the local machine's direct ByteBuffer is
+     * already zero-copy-visible to {@link #get}. This preserves the
+     * singleplayer rendering path while the server still broadcasts for any
+     * remote players (LAN guests on an integrated server, for example).
+     */
     public static synchronized void acceptRemote(DisplayPayload payload) {
+        if (OPTIMIZE_SINGLEPLAYER && MachineManager.getMachineState(payload.machineUuid()) != null) {
+            return;
+        }
+        if (payload.width() == 0 || payload.height() == 0) {
+            destroy(payload.machineUuid());
+            return;
+        }
         DisplayState s = createOrResize(payload.machineUuid(), payload.width(), payload.height());
         if (s != null) s.updateRemoteBuffer(payload.pixels());
     }

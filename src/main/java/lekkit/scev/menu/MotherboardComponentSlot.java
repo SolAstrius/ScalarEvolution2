@@ -35,6 +35,25 @@ public class MotherboardComponentSlot extends Slot {
         return motherboard.canPlaceItem(getSlotIndex(), stack);
     }
 
+    /**
+     * Inactive slots are invisible to hover detection, click routing, and
+     * background-hint rendering — i.e. the slot behaves as if it doesn't
+     * exist. We use this to hide component slots when no motherboard is
+     * installed (or when the installed motherboard's tier doesn't enable
+     * this slot). Prevents the "hover reveals 14 phantom slot positions
+     * on an empty panel" UX problem where players could mouse over
+     * invisible-but-clickable rectangles.
+     *
+     * <p>If the slot already holds an item (e.g. a motherboard was yanked
+     * out while components were installed), {@link #mayPickup} still
+     * allows the player to retrieve it — the slot disappearing visually
+     * shouldn't trap items inside.
+     */
+    @Override
+    public boolean isActive() {
+        return motherboard.isSlotUsable(getSlotIndex());
+    }
+
     @Override
     public boolean mayPickup(Player player) {
         return motherboard.isSlotUsable(getSlotIndex()) || !getItem().isEmpty();

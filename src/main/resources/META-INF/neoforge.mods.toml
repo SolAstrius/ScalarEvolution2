@@ -24,3 +24,9 @@ logoFile="icon.png"
     versionRange="${minecraft_version_range}"
     ordering="NONE"
     side="BOTH"
+
+# Mixin config: creative tab section-banner injections live here.
+# Client-side only — banners are pure UI decoration and the server never
+# builds the creative-tab item list.
+[[mixins]]
+config="scev.mixins.json"

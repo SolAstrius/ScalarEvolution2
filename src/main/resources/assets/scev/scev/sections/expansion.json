@@ -1,0 +1,10 @@
+{
+  "priority": 400,
+  "title": {
+    "text": { "translate": "itemGroup.scev.section.expansion" },
+    "background": "#bb3a1a4a",
+    "color": "#ffc090ff",
+    "secondary_color": "#ff7050b0"
+  },
+  "sprite": "scev:banner"
+}

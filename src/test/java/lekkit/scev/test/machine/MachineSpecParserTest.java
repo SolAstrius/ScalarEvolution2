@@ -8,6 +8,8 @@ package lekkit.scev.test.machine;
 import static org.junit.jupiter.api.Assertions.*;
 
 import java.util.UUID;
+import lekkit.scev.items.FirmwareBlob;
+import lekkit.scev.items.FlashFirmware;
 import lekkit.scev.items.MotherboardInventory;
 import lekkit.scev.items.MotherboardItem;
 import lekkit.scev.machine.MachineSpec;
@@ -16,8 +18,10 @@ import lekkit.scev.machine.firmware.FirmwareRegistry;
 import lekkit.scev.machine.firmware.LinuxFirmware;
 import lekkit.scev.machine.storage.BuildrootDiskTemplate;
 import lekkit.scev.machine.storage.DiskTemplateRegistry;
+import lekkit.scev.main.ScevDataComponents;
 import lekkit.scev.main.ScevRegistry;
 import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.Bootstrap;
 import net.minecraft.world.item.ItemStack;
 import org.junit.jupiter.api.BeforeAll;
@@ -381,5 +385,124 @@ class MachineSpecParserTest {
         mb.setItem(MotherboardItem.SLOT_NVME_START + 1, new ItemStack(ScevRegistry.NVME.get())); // DISABLED
         MachineSpec spec = MachineSpecParser.fromMotherboard(UUID.randomUUID(), mbStack, false);
         assertEquals(1, spec.nvmeDrives().size());
+    }
+
+    // -- Firmware data-component precedence --------------------------------
+    //
+    // Flash chip carries up to three data components that decide firmware.
+    // Resolved in this order: bytes > id-override > kind > default(LINUX).
+    // A bug in precedence would silently boot the wrong firmware, which is
+    // the worst kind of failure (no stack trace, just "why doesn't my
+    // blinky blink").
+
+    @Test
+    @DisplayName("FIRMWARE_KIND=BLINKY on flash -> spec firmwareId references BLINKY registry entry")
+    void flashKindBlinky() {
+        ItemStack flash = new ItemStack(ScevRegistry.FLASH_CHIP.get());
+        flash.set(ScevDataComponents.FIRMWARE_KIND.get(), FlashFirmware.BLINKY);
+
+        ItemStack mbStack = new ItemStack(ScevRegistry.MOTHERBOARD1.get());
+        new MotherboardInventory(() -> mbStack).setItem(MotherboardItem.SLOT_FLASH, flash);
+        MachineSpec spec = MachineSpecParser.fromMotherboard(UUID.randomUUID(), mbStack, false);
+
+        MachineSpec.FirmwareSpec fw = spec.firmware();
+        assertEquals(FirmwareRegistry.BLINKY, fw.firmwareId(),
+                "FIRMWARE_KIND=BLINKY must route to the BLINKY registry id");
+        assertNull(fw.rawBytes(), "kind-only path must not emit rawBytes");
+    }
+
+    @Test
+    @DisplayName("FIRMWARE_KIND=BLANK on flash -> firmwareId stays null (explicit no-firmware)")
+    void flashKindBlank() {
+        ItemStack flash = new ItemStack(ScevRegistry.FLASH_CHIP.get());
+        flash.set(ScevDataComponents.FIRMWARE_KIND.get(), FlashFirmware.BLANK);
+
+        ItemStack mbStack = new ItemStack(ScevRegistry.MOTHERBOARD1.get());
+        new MotherboardInventory(() -> mbStack).setItem(MotherboardItem.SLOT_FLASH, flash);
+        MachineSpec spec = MachineSpecParser.fromMotherboard(UUID.randomUUID(), mbStack, false);
+
+        // Flash IS still present (the chip exists in the slot) but carries
+        // the explicit BLANK kind — backend will boot demo bootrom fallback.
+        assertTrue(spec.hasFirmware(),
+                "BLANK flash still emits a FirmwareSpec (the UUID + sizeMb metadata), "
+                        + "just with no firmwareId to resolve");
+        assertNull(spec.firmware().firmwareId(),
+                "BLANK kind must not resolve to any firmware");
+    }
+
+    @Test
+    @DisplayName("No FIRMWARE_KIND component -> parser falls back to LINUX (legacy-world compat)")
+    void flashNoComponentFallsBackToLinux() {
+        ItemStack flash = new ItemStack(ScevRegistry.FLASH_CHIP.get());
+        // deliberately no data components set
+
+        ItemStack mbStack = new ItemStack(ScevRegistry.MOTHERBOARD1.get());
+        new MotherboardInventory(() -> mbStack).setItem(MotherboardItem.SLOT_FLASH, flash);
+        MachineSpec spec = MachineSpecParser.fromMotherboard(UUID.randomUUID(), mbStack, false);
+
+        assertEquals(FirmwareRegistry.LINUX, spec.firmware().firmwareId(),
+                "Pre-component worlds had flash chips with no NBT; those must keep "
+                        + "booting LINUX after the data-component migration");
+    }
+
+    @Test
+    @DisplayName("FIRMWARE_ID_OVERRIDE wins over FIRMWARE_KIND (third-party escape hatch)")
+    void idOverrideWinsOverKind() {
+        ItemStack flash = new ItemStack(ScevRegistry.FLASH_CHIP.get());
+        flash.set(ScevDataComponents.FIRMWARE_KIND.get(), FlashFirmware.LINUX);
+        flash.set(ScevDataComponents.FIRMWARE_ID_OVERRIDE.get(),
+                ResourceLocation.fromNamespaceAndPath("othermod", "crazy_bios"));
+
+        ItemStack mbStack = new ItemStack(ScevRegistry.MOTHERBOARD1.get());
+        new MotherboardInventory(() -> mbStack).setItem(MotherboardItem.SLOT_FLASH, flash);
+        MachineSpec spec = MachineSpecParser.fromMotherboard(UUID.randomUUID(), mbStack, false);
+
+        assertEquals(ResourceLocation.fromNamespaceAndPath("othermod", "crazy_bios"),
+                spec.firmware().firmwareId(),
+                "A mod-set id override must take precedence over the typed enum so "
+                        + "integration mods can re-target chips without touching our enum");
+    }
+
+    @Test
+    @DisplayName("FIRMWARE_BYTES wins over everything (player-authored custom flash)")
+    void rawBytesWinsOverAll() {
+        byte[] payload = {0x13, 0, 0, 0};  // addi x0, x0, 0 — a nop for RV
+        ItemStack flash = new ItemStack(ScevRegistry.FLASH_CHIP.get());
+        flash.set(ScevDataComponents.FIRMWARE_KIND.get(), FlashFirmware.LINUX);
+        flash.set(ScevDataComponents.FIRMWARE_ID_OVERRIDE.get(),
+                ResourceLocation.fromNamespaceAndPath("othermod", "crazy_bios"));
+        flash.set(ScevDataComponents.FIRMWARE_BYTES.get(), new FirmwareBlob(payload));
+
+        ItemStack mbStack = new ItemStack(ScevRegistry.MOTHERBOARD1.get());
+        new MotherboardInventory(() -> mbStack).setItem(MotherboardItem.SLOT_FLASH, flash);
+        MachineSpec spec = MachineSpecParser.fromMotherboard(UUID.randomUUID(), mbStack, false);
+
+        MachineSpec.FirmwareSpec fw = spec.firmware();
+        assertTrue(fw.hasRawBytes(),
+                "Raw bytes is the single source of truth for custom firmware; "
+                        + "precedence must override both kind and override");
+        assertNull(fw.firmwareId(),
+                "When rawBytes wins, the id path must not also be emitted — otherwise "
+                        + "the backend has to untangle which one is 'real'");
+    }
+
+    @Test
+    @DisplayName("Empty FIRMWARE_BYTES (zero-length) falls through to kind/default, not wins")
+    void emptyRawBytesDoesNotWin() {
+        // Guard against a chip that has an empty bytes blob (e.g. someone
+        // started flashing and cancelled) being treated as "use these bytes
+        // = nothing" instead of "no custom content". The predicate is
+        // hasRawBytes() = non-null AND non-empty.
+        ItemStack flash = new ItemStack(ScevRegistry.FLASH_CHIP.get());
+        flash.set(ScevDataComponents.FIRMWARE_BYTES.get(), new FirmwareBlob(new byte[0]));
+        flash.set(ScevDataComponents.FIRMWARE_KIND.get(), FlashFirmware.BLINKY);
+
+        ItemStack mbStack = new ItemStack(ScevRegistry.MOTHERBOARD1.get());
+        new MotherboardInventory(() -> mbStack).setItem(MotherboardItem.SLOT_FLASH, flash);
+        MachineSpec spec = MachineSpecParser.fromMotherboard(UUID.randomUUID(), mbStack, false);
+
+        assertEquals(FirmwareRegistry.BLINKY, spec.firmware().firmwareId(),
+                "Empty byte blob must not suppress the typed kind — it's 'I intended "
+                        + "to flash but didn't' not 'use my zero bytes as firmware'");
     }
 }

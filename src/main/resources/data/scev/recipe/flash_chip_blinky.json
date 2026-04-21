@@ -1,0 +1,16 @@
+{
+  "_comment": "Stamps a blank flash chip with FIRMWARE_KIND=BLINKY so it boots the bare-metal demo on any machine with a GPIO card. Recipe is shapeless: flash + redstone torch anywhere on the grid.",
+  "type": "minecraft:crafting_shapeless",
+  "category": "misc",
+  "ingredients": [
+    { "item": "scev:flash_chip" },
+    { "item": "minecraft:redstone_torch" }
+  ],
+  "result": {
+    "id": "scev:flash_chip",
+    "count": 1,
+    "components": {
+      "scev:firmware_kind": "blinky"
+    }
+  }
+}

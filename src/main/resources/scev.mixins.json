@@ -1,0 +1,15 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "lekkit.scev.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "refmap": "scev.refmap.json",
+  "client": [
+    "creative_tab.CreativeModeInventoryScreenMixin",
+    "creative_tab.CreativeModeTabMixin",
+    "creative_tab.ItemPickerMenuMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

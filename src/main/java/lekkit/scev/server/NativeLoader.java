@@ -39,6 +39,17 @@ public final class NativeLoader {
         }
     }
 
+    /**
+     * @return true iff a previous {@link #ensureLoaded} attempt succeeded.
+     *         Does NOT trigger a load attempt — use {@link #ensureLoaded} if
+     *         you need the loader to run. Intended for preflight validators
+     *         that want to report a friendly "native missing" message
+     *         without racing with the common-setup load.
+     */
+    public static boolean isLoaded() {
+        return loaded != null && loaded;
+    }
+
     private static boolean tryLoad() {
         if (RVVMNative.isLoaded()) {
             LOG.info("librvvm already loaded (system-wide)");

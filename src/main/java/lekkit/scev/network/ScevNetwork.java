@@ -66,6 +66,12 @@ public final class ScevNetwork {
             // Power button on the component-editor screen: resolve the handle
             // through the case block entity directly.
             handle = cc.getCaseBE();
+        } else if (menu instanceof lekkit.scev.menu.McuBoardMenu mcu) {
+            // Same story for the MCU board's install menu — the block entity
+            // IS the handle. Without this branch the power button on the MCU
+            // screen silently no-ops (packet sent, server drops it, DataSlot
+            // never flips, button visual looks broken).
+            handle = mcu.getMcu();
         }
         if (handle == null) return;
         if (payload.reset()) handle.reset(); else handle.power();

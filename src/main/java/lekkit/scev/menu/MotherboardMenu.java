@@ -59,6 +59,19 @@ public class MotherboardMenu extends AbstractContainerMenu {
         return new MotherboardMenu(id, inv, slot);
     }
 
+    /**
+     * @return the {@link MotherboardItem} the menu is currently backed by, or
+     *         {@code null} if the stack at {@link #motherboardInvSlot} is no
+     *         longer a motherboard (e.g. the player moved it away). Screens
+     *         use this for tier-dependent rendering decisions — slot hints,
+     *         background selection — without having to re-read the stack each
+     *         frame.
+     */
+    public MotherboardItem getMotherboardItem() {
+        ItemStack held = playerInv.getItem(motherboardInvSlot);
+        return held.getItem() instanceof MotherboardItem mi ? mi : null;
+    }
+
     @Override
     public ItemStack quickMoveStack(Player player, int index) {
         final int mbSlotCount = SlotDef.MOTHERBOARD.size();

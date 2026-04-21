@@ -98,15 +98,14 @@ public class MachineScreen extends AbstractContainerScreen<MachineMenu> {
         this.displayX = leftPos + SCREEN_MARGIN;
         this.displayY = topPos + SCREEN_MARGIN;
 
-        // Small power / reset buttons at the top-right of the framebuffer.
-        int btnX = displayX + displayW - 70;
+        // Single power button at the top-right of the framebuffer. Off→on
+        // reboots from bootrom; separate warm-reset affordance removed — see
+        // ComputerCaseScreen javadoc for rationale.
+        int btnX = displayX + displayW - 34;
         int btnY = topPos + imageHeight - BUTTON_STRIP_H + 2;
         addRenderableWidget(Button.builder(Component.translatable("button.scev.power"),
                 b -> PacketDistributor.sendToServer(new MachineResetPayload(false)))
                 .bounds(btnX, btnY, 32, 12).build());
-        addRenderableWidget(Button.builder(Component.translatable("button.scev.reset"),
-                b -> PacketDistributor.sendToServer(new MachineResetPayload(true)))
-                .bounds(btnX + 34, btnY, 32, 12).build());
 
         // Ensure no widget is holding keyboard focus — all key events should
         // reach our keyPressed / keyReleased so they're forwarded to the VM,
@@ -117,7 +116,15 @@ public class MachineScreen extends AbstractContainerScreen<MachineMenu> {
     @Override
     protected void renderBg(GuiGraphics g, float partialTick, int mouseX, int mouseY) {
         DisplayState display = DisplayManager.get(menu.getMachineUuid());
-        if (display == null) return;
+        if (display == null) {
+            // VM not running (never powered on, or powered off while the
+            // screen stayed open). Paint a solid black rect so the display
+            // area doesn't fall through to the dimmed-world layer behind —
+            // players read that as "my screen vanished" rather than "the VM
+            // is off."
+            g.fill(displayX, displayY, displayX + displayW, displayY + displayH, 0xFF000000);
+            return;
+        }
         ResourceLocation tex = display.getOrUploadTexture();
         RenderSystem.setShaderColor(1.0F, 1.0F, 1.0F, 1.0F);
         // Scale the native 640×480 texture into the computed display area.

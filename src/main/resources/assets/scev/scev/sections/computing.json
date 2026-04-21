@@ -1,0 +1,10 @@
+{
+  "priority": 200,
+  "title": {
+    "text": { "translate": "itemGroup.scev.section.computing" },
+    "background": "#bb0c2a52",
+    "color": "#ff6bc5ff",
+    "secondary_color": "#ff2878bc"
+  },
+  "sprite": "scev:banner"
+}

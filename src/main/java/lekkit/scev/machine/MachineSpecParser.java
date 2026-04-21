@@ -7,6 +7,8 @@ package lekkit.scev.machine;
 
 import java.util.UUID;
 import lekkit.scev.items.CpuItem;
+import lekkit.scev.items.FirmwareBlob;
+import lekkit.scev.items.FlashFirmware;
 import lekkit.scev.items.FlashItem;
 import lekkit.scev.items.GpioItem;
 import lekkit.scev.items.MotherboardInventory;
@@ -15,9 +17,11 @@ import lekkit.scev.items.NvmeItem;
 import lekkit.scev.items.PciCardItem;
 import lekkit.scev.items.PreloadedNvmeItem;
 import lekkit.scev.items.RamItem;
+import lekkit.scev.items.SocItem;
 import lekkit.scev.items.StorageItem;
 import lekkit.scev.machine.firmware.FirmwareRegistry;
 import lekkit.scev.machine.firmware.ScevFirmware;
+import lekkit.scev.main.ScevDataComponents;
 import net.minecraft.core.NonNullList;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.item.ItemStack;
@@ -147,18 +151,14 @@ public final class MachineSpecParser {
         NonNullList<ItemStack> comps = mbInv.snapshot();
 
         // -- Flash detection + firmware resolution ---------------------------
-        // A flash chip references a firmware by registry id. Today every
-        // FlashItem uses the default id (LINUX); a future NBT-tagged chip
-        // will carry its own reference. The firmware decides the RAM floor,
-        // cmdline, and which RVVM load APIs get called with which assets.
-        //
-        // We resolve the firmware entry upfront so the memory clamp below
-        // can ask the firmware for its minimum.
         ItemStack flashStack = comps.get(MotherboardItem.SLOT_FLASH);
         boolean hasFlashChip = flashStack.getItem() instanceof FlashItem;
-        ResourceLocation firmwareId = hasFlashChip ? DEFAULT_FIRMWARE_ID : null;
-        ScevFirmware firmware = FirmwareRegistry.get(firmwareId);
-        long firmwareFloor = firmware != null ? firmware.minRamMb() : 0L;
+        FlashFirmwareResolution resolved = hasFlashChip
+                ? resolveFlashFirmware(flashStack)
+                : FlashFirmwareResolution.NONE;
+        FirmwareBlob rawBytes = resolved.rawBytes();
+        ResourceLocation firmwareId = resolved.firmwareId();
+        long firmwareFloor = resolved.floor();
 
         // -- Memory -----------------------------------------------------------
         long totalMb = 0;
@@ -204,7 +204,8 @@ public final class MachineSpecParser {
             builder.firmware(new MachineSpec.FirmwareSpec(
                     flashUuid, flashItem.getSizeMb(),
                     /* origin */ null,
-                    /* firmwareId */ firmwareId));
+                    /* firmwareId */ firmwareId,
+                    /* rawBytes */ rawBytes));
         }
 
         // -- NVMe drives (slots 6..7) ----------------------------------------
@@ -251,5 +252,117 @@ public final class MachineSpecParser {
         }
 
         return builder.build();
+    }
+
+    /**
+     * Build a {@link MachineSpec} from an MCU board's two installed items.
+     *
+     * <p>Analogous to {@link #fromMotherboard} but collapses the entire
+     * "motherboard + components" model into a pair: a {@link SocItem} that
+     * carries the CPU/RAM/ISA specification, and an optional flash chip
+     * carrying the firmware. The MCU has implicit GPIO (the SoC exposes
+     * redstone pins directly) and no PCI/NVMe/display — a focused, tiny
+     * machine for bare-metal firmware.
+     *
+     * @param machineUuid  Stable machine UUID (persisted on the BE).
+     * @param socStack     SoC item — must be a {@link SocItem}, else null returned.
+     * @param flashStack   Flash item or empty. No flash = no firmware (CPU
+     *                     traps on first fetch; only interesting for tests).
+     * @return A spec, or {@code null} if no SoC is installed.
+     */
+    public static @Nullable MachineSpec fromMcu(UUID machineUuid, ItemStack socStack, ItemStack flashStack) {
+        if (socStack == null || socStack.isEmpty() || !(socStack.getItem() instanceof SocItem soc)) {
+            return null;
+        }
+
+        // -- Firmware resolution (same precedence as motherboard path) -------
+        boolean hasFlashChip = flashStack != null && flashStack.getItem() instanceof FlashItem;
+        FlashFirmwareResolution resolved = hasFlashChip
+                ? resolveFlashFirmware(flashStack)
+                : FlashFirmwareResolution.NONE;
+
+        // -- Memory clamp ----------------------------------------------------
+        // SoC declares on-die RAM in KiB (4 / 256 / 32768). Convert to MiB,
+        // then clamp up to both the absolute minimum and the firmware's
+        // declared floor. This is what lets a Tier-1 SoC (4 KiB on-die) boot
+        // Blinky (needs 1 MiB) without the player hand-waving memory.
+        long socMb = Math.max(1, (long) soc.getEmbeddedRamKib() / 1024);
+        long floor = Math.max(MIN_RAM_MB, resolved.floor());
+        long memMb = Math.max(socMb, floor);
+
+        MachineSpec.Builder builder = MachineSpec.builder(machineUuid)
+                .memMb(memMb)
+                .smp(soc.getHartCount())
+                .isa(soc.getIsa())
+                .cmdline(DEFAULT_CMDLINE)
+                // MCU has implicit GPIO — no separate PCI card slot, the
+                // SoC itself bonds the redstone pins.
+                .hasGpio(true);
+
+        if (hasFlashChip && flashStack.getItem() instanceof FlashItem flashItem) {
+            UUID flashUuid = flashItem.ensureUuid(flashStack);
+            builder.firmware(new MachineSpec.FirmwareSpec(
+                    flashUuid, flashItem.getSizeMb(),
+                    /* origin */ null,
+                    /* firmwareId */ resolved.firmwareId(),
+                    /* rawBytes */ resolved.rawBytes()));
+        }
+
+        return builder.build();
+    }
+
+    /**
+     * Firmware precedence chain for flash chips, shared by the motherboard
+     * and MCU paths:
+     *
+     * <ol>
+     *   <li>{@code FIRMWARE_BYTES} — raw player-authored payload. Bypasses
+     *       registry. Returned via {@link FlashFirmwareResolution#rawBytes}.</li>
+     *   <li>{@code FIRMWARE_ID_OVERRIDE} — arbitrary {@link ResourceLocation}
+     *       for third-party firmwares not in the typed {@link FlashFirmware}
+     *       enum.</li>
+     *   <li>{@code FIRMWARE_KIND} — typed built-in enum. {@code BLANK}
+     *       resolves to a null id (explicit no-firmware).</li>
+     *   <li>No components set → {@link #DEFAULT_FIRMWARE_ID} (LINUX), so
+     *       pre-component worlds keep booting unchanged.</li>
+     * </ol>
+     *
+     * <p>The returned {@code floor} is the firmware's {@code minRamMb} if we
+     * landed on a registry entry, else 0 — callers clamp memory against it.
+     */
+    private static FlashFirmwareResolution resolveFlashFirmware(ItemStack flashStack) {
+        FirmwareBlob stackedBytes = flashStack.get(ScevDataComponents.FIRMWARE_BYTES.get());
+        if (stackedBytes != null && !stackedBytes.isEmpty()) {
+            // rawBytes wins unconditionally — the player-authored path.
+            return new FlashFirmwareResolution(stackedBytes, null, 0L);
+        }
+
+        ResourceLocation id;
+        ResourceLocation override = flashStack.get(ScevDataComponents.FIRMWARE_ID_OVERRIDE.get());
+        if (override != null) {
+            id = override;
+        } else {
+            FlashFirmware kind = flashStack.get(ScevDataComponents.FIRMWARE_KIND.get());
+            if (kind != null) {
+                id = kind.id();                 // null when kind == BLANK
+            } else {
+                id = DEFAULT_FIRMWARE_ID;       // legacy world: LINUX
+            }
+        }
+        ScevFirmware fw = FirmwareRegistry.get(id);
+        long floor = fw != null ? fw.minRamMb() : 0L;
+        return new FlashFirmwareResolution(null, id, floor);
+    }
+
+    /**
+     * Outcome of {@link #resolveFlashFirmware}. Exactly one of
+     * {@code rawBytes} and {@code firmwareId} is set (or both null for
+     * the "no flash chip at all" shortcut).
+     */
+    private record FlashFirmwareResolution(
+            @Nullable FirmwareBlob rawBytes,
+            @Nullable ResourceLocation firmwareId,
+            long floor) {
+        static final FlashFirmwareResolution NONE = new FlashFirmwareResolution(null, null, 0L);
     }
 }

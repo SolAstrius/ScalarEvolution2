@@ -1,0 +1,10 @@
+{
+  "priority": 0,
+  "title": {
+    "text": { "translate": "itemGroup.scev.section.cases_peripherals" },
+    "background": "#bb2a2d2e",
+    "color": "#ffe0e0e0",
+    "secondary_color": "#ff9a9a9a"
+  },
+  "sprite": "scev:banner"
+}

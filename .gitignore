@@ -35,7 +35,11 @@ runs/
 logs/
 crash-reports/
 
+# Nix / direnv
+.direnv/
+
 # Agent / working notes
 AGENTS.md
 README.md
 docs/
+.claude/

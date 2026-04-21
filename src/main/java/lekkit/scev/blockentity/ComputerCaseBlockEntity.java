@@ -5,13 +5,17 @@
  */
 package lekkit.scev.blockentity;
 
+import java.nio.ByteBuffer;
 import java.util.UUID;
+import lekkit.scev.blocks.DirectionalBlock;
 import lekkit.scev.items.MotherboardItem;
 import lekkit.scev.machine.BootSplash;
 import lekkit.scev.machine.FramebufferView;
 import lekkit.scev.machine.GpioDevice;
+import lekkit.scev.machine.GpioPinMap;
 import lekkit.scev.machine.MachineSpec;
 import lekkit.scev.machine.MachineSpecParser;
+import lekkit.scev.network.DisplayPayload;
 import lekkit.scev.server.IMachineHandle;
 import lekkit.scev.server.MachineManager;
 import lekkit.scev.server.MachineState;
@@ -20,6 +24,8 @@ import net.minecraft.core.Direction;
 import net.minecraft.core.HolderLookup;
 import net.minecraft.core.NonNullList;
 import net.minecraft.nbt.CompoundTag;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.Container;
 import net.minecraft.world.ContainerHelper;
 import net.minecraft.world.entity.player.Player;
@@ -27,6 +33,7 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.entity.BlockEntityType;
 import net.minecraft.world.level.block.state.BlockState;
+import net.neoforged.neoforge.network.PacketDistributor;
 
 /**
  * Minimal computer-case block entity. Implements {@link Container} so that menu
@@ -72,7 +79,12 @@ public abstract class ComputerCaseBlockEntity extends ScevBlockEntity
 
     @Override
     public void powerOff() {
-        MachineManager.destroyMachineState(getMachineUUID());
+        UUID uuid = getMachineUUID();
+        MachineManager.destroyMachineState(uuid);
+        // Tell nearby clients to evict their cached DisplayState so they stop
+        // rendering the last frame of the now-gone VM. Zero dimensions act as
+        // the dispose sentinel — see DisplayManager#acceptRemote.
+        broadcastDisplayDispose(uuid);
     }
 
     @Override
@@ -96,7 +108,13 @@ public abstract class ComputerCaseBlockEntity extends ScevBlockEntity
 
     /**
      * Forward a packed 6-bit redstone input to the GPIO card (if installed).
-     * Bit N = Direction.ordinal() N. Called by the block's neighbour-update path.
+     *
+     * <p>{@code signals} arrives from the block's neighbour-update path in
+     * world-oriented form: bit N = {@link Direction#ordinal()} N. The VM
+     * however expects block-relative pins (FRONT/BACK/LEFT/RIGHT/TOP/BOTTOM)
+     * so that firmware authors get a stable port layout regardless of which
+     * way the case was placed. Remap via {@link GpioPinMap#worldToRelative}
+     * before handing to {@link GpioDevice#writePins}.
      */
     @Override
     public void onRedstoneInput(int signals) {
@@ -104,7 +122,21 @@ public abstract class ComputerCaseBlockEntity extends ScevBlockEntity
         if (state == null) return;
         GpioDevice gpio = state.getGPIO();
         if (gpio == null) return;
-        gpio.writePins(signals & 0x3F);
+        gpio.writePins(GpioPinMap.worldToRelative(signals & GpioPinMap.PIN_MASK, facing()));
+    }
+
+    /**
+     * Block's current horizontal facing. Falls back to NORTH when the block
+     * state has no FACING property (defensive — every ScevBlock is a
+     * {@link DirectionalBlock} today, but guard the assumption so a future
+     * non-directional case doesn't NPE here).
+     */
+    private Direction facing() {
+        BlockState bs = getBlockState();
+        if (bs.hasProperty(DirectionalBlock.FACING)) {
+            return bs.getValue(DirectionalBlock.FACING);
+        }
+        return Direction.NORTH;
     }
 
     /**
@@ -127,19 +159,81 @@ public abstract class ComputerCaseBlockEntity extends ScevBlockEntity
         if (machineState == null) return;
         tickCount++;
 
-        // Redstone output sync.
+        // Redstone output sync. The GPIO device speaks block-relative pins;
+        // project back to world-oriented before storing (setOutRedstoneSignals
+        // expects bit N = Direction.ordinal() N, since that's what
+        // DirectionalBlock#getSignal indexes into per-face).
         GpioDevice gpio = machineState.getGPIO();
         if (gpio == null) {
             if (getOutRedstoneSignals() != 0) setOutRedstoneSignals(0);
         } else {
-            int pins = gpio.readPins() & 0x3F;
-            if (pins != getOutRedstoneSignals()) setOutRedstoneSignals(pins);
+            int relPins = gpio.readPins() & GpioPinMap.PIN_MASK;
+            int worldPins = GpioPinMap.relativeToWorld(relPins, facing());
+            if (worldPins != getOutRedstoneSignals()) setOutRedstoneSignals(worldPins);
         }
 
         // Animated splash heartbeat.
         FramebufferView fb = machineState.getDisplay();
         if (fb != null) {
             BootSplash.paintHeartbeat(fb, tickCount);
+            // Broadcast the framebuffer periodically so remote players (LAN
+            // guests, dedicated-server clients) see the display. Singleplayer
+            // client short-circuits in DisplayManager#acceptRemote because it
+            // can read the in-JVM MachineState directly. Rate-limited to
+            // 5 Hz — uncompressed 640×480 RGBA is ~1.2 MB per frame, so
+            // throttling is mandatory until we add delta encoding.
+            if ((tickCount & 3) == 0
+                    && level instanceof ServerLevel sl
+                    && !sl.getServer().isSingleplayer()) {
+                broadcastFramebuffer(sl, fb);
+            }
+        }
+    }
+
+    /**
+     * Pack the framebuffer pixels into a {@link DisplayPayload} and send to
+     * every {@link ServerPlayer} within {@link #DISPLAY_BROADCAST_RADIUS} of
+     * this block. Runs on the server tick thread; iterates players in-place
+     * without copying the list.
+     */
+    private void broadcastFramebuffer(ServerLevel sl, FramebufferView fb) {
+        int len = fb.byteSize();
+        byte[] pixels = new byte[len];
+        ByteBuffer src = fb.pixels();
+        // Defensive: pixels() resets position to 0 on each call; stable length.
+        src.get(pixels, 0, Math.min(len, src.remaining()));
+
+        DisplayPayload payload = new DisplayPayload(
+                getMachineUUID(),
+                (short) fb.width(),
+                (short) fb.height(),
+                pixels);
+        sendToNearby(sl, payload);
+    }
+
+    /**
+     * Dispose sentinel: width=0, height=0, no pixels. Client evicts
+     * DisplayState. Sent only on multi-player / LAN so the singleplayer host
+     * (which already evicts via DisplayManager.get's stale check) isn't
+     * pinged for nothing.
+     */
+    private void broadcastDisplayDispose(UUID uuid) {
+        if (!(level instanceof ServerLevel sl) || sl.getServer().isSingleplayer()) return;
+        sendToNearby(sl, new DisplayPayload(uuid, (short) 0, (short) 0, new byte[0]));
+    }
+
+    /** Radius (blocks) a {@link DisplayPayload} is broadcast within. */
+    private static final int DISPLAY_BROADCAST_RADIUS = 16;
+
+    private void sendToNearby(ServerLevel sl, DisplayPayload payload) {
+        double cx = worldPosition.getX() + 0.5;
+        double cy = worldPosition.getY() + 0.5;
+        double cz = worldPosition.getZ() + 0.5;
+        double r2 = (double) DISPLAY_BROADCAST_RADIUS * DISPLAY_BROADCAST_RADIUS;
+        for (ServerPlayer p : sl.players()) {
+            if (p.distanceToSqr(cx, cy, cz) <= r2) {
+                PacketDistributor.sendToPlayer(p, payload);
+            }
         }
     }
 

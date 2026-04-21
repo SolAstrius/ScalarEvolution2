@@ -5,10 +5,14 @@
  */
 package lekkit.scev.items;
 
+import java.util.List;
 import java.util.UUID;
 import lekkit.scev.main.ScevDataComponents;
+import net.minecraft.ChatFormatting;
+import net.minecraft.network.chat.Component;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.TooltipFlag;
 import org.jetbrains.annotations.Nullable;
 
 /**
@@ -43,5 +47,28 @@ public class StorageItem extends Item {
 
     public @Nullable UUID getUuid(ItemStack stack) {
         return stack.get(ScevDataComponents.STORAGE_UUID.get());
+    }
+
+    @Override
+    public void appendHoverText(ItemStack stack, TooltipContext ctx, List<Component> tooltip, TooltipFlag flag) {
+        long mb = getSizeMb();
+        if (mb > 0) {
+            tooltip.add(Component.translatable("text.scev.capacity")
+                    .append(Component.literal(": "))
+                    .append(Component.literal(formatSize(mb)).withStyle(ChatFormatting.YELLOW)));
+        }
+        super.appendHoverText(stack, ctx, tooltip, flag);
+    }
+
+    /**
+     * Format a size in MiB as "N MiB" for sub-GiB values, "N GiB" for
+     * GiB-aligned values, and "N.N GiB" otherwise. Keeps small flash chips
+     * readable ("8 MiB", not "0.0 GiB") while letting multi-GiB NVMe drives
+     * present sensibly ("2 GiB", not "2048 MiB").
+     */
+    public static String formatSize(long mb) {
+        if (mb < 1024) return mb + " MiB";
+        if (mb % 1024 == 0) return (mb / 1024) + " GiB";
+        return String.format("%.1f GiB", mb / 1024.0);
     }
 }

@@ -9,6 +9,7 @@ import lekkit.scev.client.render.blockentity.TinkerpadRenderer;
 import lekkit.scev.client.render.blockentity.VT100Renderer;
 import lekkit.scev.client.screen.ComputerCaseScreen;
 import lekkit.scev.client.screen.MachineScreen;
+import lekkit.scev.client.screen.McuBoardScreen;
 import lekkit.scev.client.screen.MotherboardScreen;
 import lekkit.scev.main.ScevRegistry;
 import net.neoforged.neoforge.client.event.EntityRenderersEvent;
@@ -26,5 +27,6 @@ public final class ScevRenderers {
         e.register(ScevRegistry.COMPUTER_CASE_MENU.get(), ComputerCaseScreen::new);
         e.register(ScevRegistry.MOTHERBOARD_MENU.get(), MotherboardScreen::new);
         e.register(ScevRegistry.MACHINE_MENU.get(), MachineScreen::new);
+        e.register(ScevRegistry.MCU_BOARD_MENU.get(), McuBoardScreen::new);
     }
 }

@@ -28,9 +28,10 @@ public class ScevItemModelProvider extends ItemModelProvider {
                 ScevRegistry.DSUB_CONNECTOR, ScevRegistry.CRYSTAL_OSCILLATOR,
                 ScevRegistry.ELECTRONIC_PARTS, ScevRegistry.VOLTAGE_REGULATOR,
                 ScevRegistry.RTC_MODULE, ScevRegistry.MEMORY_CHIP, ScevRegistry.CHAR_DISPLAY,
-                ScevRegistry.GFX_DISPLAY, ScevRegistry.SOC,
+                ScevRegistry.GFX_DISPLAY,
                 ScevRegistry.SOLDERING_IRON,
                 ScevRegistry.CPU1, ScevRegistry.CPU2, ScevRegistry.CPU3,
+                ScevRegistry.SOC1, ScevRegistry.SOC2, ScevRegistry.SOC3,
                 ScevRegistry.RAM_SODIMM1, ScevRegistry.RAM_SODIMM2,
                 ScevRegistry.RAM_SODIMM3, ScevRegistry.RAM_SODIMM4,
                 ScevRegistry.FLASH_CHIP, ScevRegistry.HDD, ScevRegistry.NVME,
@@ -53,5 +54,6 @@ public class ScevItemModelProvider extends ItemModelProvider {
                 ResourceLocation.withDefaultNamespace("item/generated"),
                 "layer0",
                 ResourceLocation.fromNamespaceAndPath(ScalarEvolution.MODID, "item/nvme"));
+
     }
 }

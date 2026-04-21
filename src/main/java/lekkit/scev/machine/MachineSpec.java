@@ -42,23 +42,29 @@ public record MachineSpec(
     /**
      * A firmware/bootrom payload.
      *
-     * <p>Two ways to name the firmware:
+     * <p>Three ways to source the firmware, resolved in precedence order by
+     * the backend:
      *
      * <ol>
-     *   <li><b>Registry id</b> (preferred) — {@link #firmwareId} points at an
-     *       entry in {@link lekkit.scev.machine.firmware.FirmwareRegistry}. The
-     *       backend resolves the entry and loads all its payloads (bootrom +
-     *       optional kernel) in declaration order. This is how production
-     *       flash chips emit their firmware spec.</li>
+     *   <li><b>Raw bytes</b> — {@link #rawBytes} carries the literal
+     *       instruction stream. The backend writes a temp file and feeds it
+     *       to {@code rvvm_load_firmware}. This is the player-authored path
+     *       (custom programs flashed onto a chip, future in-game Programmer
+     *       block). Wins over every other field.</li>
+     *   <li><b>Registry id</b> — {@link #firmwareId} points at an entry in
+     *       {@link lekkit.scev.machine.firmware.FirmwareRegistry}. The backend
+     *       resolves the entry and loads all its payloads (bootrom + optional
+     *       kernel) in declaration order. This is how typed flash chips emit
+     *       their firmware spec (including the built-in LINUX / BLINKY
+     *       shortcut via {@link lekkit.scev.items.FlashFirmware}).</li>
      *   <li><b>Direct asset name</b> (legacy / power user) — {@link #origin}
      *       is the name of a classpath resource under
      *       {@code /assets/scev/firmware/}. The backend loads this as the
-     *       bootrom (only). Useful for tests that want to pin a specific
-     *       file or for an NBT tag that overrides the default firmware.</li>
+     *       bootrom (only). Tests and hand-rolled overrides live here.</li>
      * </ol>
      *
-     * <p>If both are set, {@code firmwareId} wins. If neither is set, no
-     * firmware is loaded (the backend falls back to {@code BootromMode}).
+     * <p>If none is set, no firmware is loaded (the backend falls back to
+     * {@link BootromMode}).
      *
      * @param uuid        Per-chip persistent UUID — used as the filename for
      *                    the per-chip image under {@code ./scev/images/}.
@@ -66,23 +72,38 @@ public record MachineSpec(
      * @param origin      Direct asset name, or {@code null}.
      * @param firmwareId  Registry id of a {@link lekkit.scev.machine.firmware.ScevFirmware},
      *                    or {@code null}.
+     * @param rawBytes    Literal firmware bytes, or {@code null}. When set,
+     *                    overrides both other sources.
      */
     public record FirmwareSpec(
             UUID uuid,
             long sizeMb,
             @Nullable String origin,
-            @Nullable ResourceLocation firmwareId) {
+            @Nullable ResourceLocation firmwareId,
+            @Nullable lekkit.scev.items.FirmwareBlob rawBytes) {
 
         /**
          * Backwards-compatible constructor with direct-asset-name only.
-         * Equivalent to {@code new FirmwareSpec(uuid, sizeMb, origin, null)}.
+         * Equivalent to {@code new FirmwareSpec(uuid, sizeMb, origin, null, null)}.
          */
         public FirmwareSpec(UUID uuid, long sizeMb, @Nullable String origin) {
-            this(uuid, sizeMb, origin, null);
+            this(uuid, sizeMb, origin, null, null);
+        }
+
+        /**
+         * Backwards-compatible constructor with direct-asset + registry id.
+         * No raw-bytes attached.
+         */
+        public FirmwareSpec(UUID uuid, long sizeMb, @Nullable String origin,
+                            @Nullable ResourceLocation firmwareId) {
+            this(uuid, sizeMb, origin, firmwareId, null);
         }
 
         /** Does this spec reference a registered firmware? */
         public boolean hasRegistryRef() { return firmwareId != null; }
+
+        /** Does this spec carry literal bytes (the custom-flash case)? */
+        public boolean hasRawBytes() { return rawBytes != null && !rawBytes.isEmpty(); }
     }
 
     /**

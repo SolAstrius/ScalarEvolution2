@@ -110,15 +110,18 @@ class FirmwareRegistryTest {
     }
 
     @Test
-    @DisplayName("registerBuiltins installs LINUX + OPENSBI_ONLY + OPEN_FIRMWARE")
-    void registerBuiltinsInstallsAllThree() {
+    @DisplayName("registerBuiltins installs LINUX + OPENSBI_ONLY + OPEN_FIRMWARE + BLINKY")
+    void registerBuiltinsInstallsAllFour() {
         FirmwareRegistry.registerBuiltins();
 
         assertTrue(FirmwareRegistry.contains(FirmwareRegistry.LINUX),
                 "LINUX must be registered by registerBuiltins (the default flash-chip firmware)");
         assertTrue(FirmwareRegistry.contains(FirmwareRegistry.OPENSBI_ONLY));
         assertTrue(FirmwareRegistry.contains(FirmwareRegistry.OPEN_FIRMWARE));
-        assertEquals(3, FirmwareRegistry.size());
+        assertTrue(FirmwareRegistry.contains(FirmwareRegistry.BLINKY),
+                "BLINKY is the bare-metal demo firmware for the upcoming MCU tier; "
+                        + "registerBuiltins must install it so flash chips can reference it.");
+        assertEquals(4, FirmwareRegistry.size());
 
         // Every built-in must have at least one payload (BOOTROM) or the
         // backend's assertion-free load loop produces a broken machine.

@@ -73,6 +73,15 @@ public final class FirmwareRegistry {
      */
     public static final ResourceLocation OPEN_FIRMWARE = rl("open_firmware");
 
+    /**
+     * Bare-metal RV32IM blinky. Toggles the FRONT GPIO pin every second so
+     * a lamp placed in front of the machine blinks at 0.5 Hz. No kernel,
+     * no OpenSBI, no FDT consumption — just a 64-byte flat binary at the
+     * reset vector. The "hello world" firmware for the upcoming MCU tier
+     * and a smoke test that tiny flat binaries boot on RVVM.
+     */
+    public static final ResourceLocation BLINKY = rl("blinky");
+
     private FirmwareRegistry() {}
 
     /**
@@ -130,6 +139,7 @@ public final class FirmwareRegistry {
         register(LINUX, LinuxFirmware.INSTANCE);
         register(OPENSBI_ONLY, OpenSbiFirmware.INSTANCE);
         register(OPEN_FIRMWARE, OpenFirmware.INSTANCE);
+        register(BLINKY, BareMetalBlinkyFirmware.INSTANCE);
     }
 
     /**

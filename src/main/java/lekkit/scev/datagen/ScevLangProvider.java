@@ -19,13 +19,32 @@ public class ScevLangProvider extends LanguageProvider {
     protected void addTranslations() {
         add("itemGroup.scev.main", "Scalar Evolution");
 
+        // Section titles — shown on the creative-tab banner strips.
+        add("itemGroup.scev.section.cases_peripherals", "Cases & Peripherals");
+        add("itemGroup.scev.section.crafting",          "Crafting Supplies");
+        add("itemGroup.scev.section.computing",         "Compute Components");
+        add("itemGroup.scev.section.storage",           "Storage Devices");
+        add("itemGroup.scev.section.expansion",         "Expansion Cards");
+        add("itemGroup.scev.section.motherboards",      "Motherboards");
+
         add("container.scev.computer_case", "Computer case");
         add("container.scev.motherboard", "Motherboard");
         add("container.scev.laptop", "Tinkerpad");
         add("container.scev.machine", "Machine");
+        add("container.scev.mcu_board", "MCU Board");
 
         add("text.scev.capacity", "Capacity");
+        add("text.scev.tier", "Tier");
         add("text.scev.cores", "Cores");
+        add("text.scev.isa", "ISA");
+        add("text.scev.embedded_ram", "On-die RAM");
+        add("text.scev.firmware", "Firmware");
+        add("text.scev.firmware.custom", "Custom (%s bytes)");
+        add("text.scev.firmware.blank", "Blank");
+        add("text.scev.firmware.linux", "Linux");
+        add("text.scev.firmware.opensbi", "OpenSBI");
+        add("text.scev.firmware.open_fw", "OpenSBI + U-Boot");
+        add("text.scev.firmware.blinky", "Blinky (bare-metal demo)");
         add("text.scev.ram_slots", "Memory slots");
         add("text.scev.pci_slots", "PCI Expansion slots");
         add("text.scev.m2_slots", "M.2 (NGFF) slots");
@@ -35,9 +54,17 @@ public class ScevLangProvider extends LanguageProvider {
         add("text.scev.release_grab_hint", "Ctrl+Alt+G: Release grab");
 
         add("button.scev.power", "Power");
-        add("button.scev.reset", "Reset");
         add("tooltip.scev.power", "Toggle machine power");
-        add("tooltip.scev.reset", "Send CPU reset to a running machine");
+
+        // Power-on preflight failure messages. Shown as the action-bar
+        // overlay when the player clicks Power but a required component is
+        // missing; paired with a red button flash + error beep.
+        add("text.scev.power.fail.native_not_loaded", "RVVM native library not loaded — see server log");
+        add("text.scev.power.fail.no_motherboard",    "Install a motherboard first");
+        add("text.scev.power.fail.no_cpu",            "Install a CPU");
+        add("text.scev.power.fail.no_flash",          "Install a firmware flash chip");
+        add("text.scev.power.fail.no_ram",            "Install at least one RAM stick");
+        add("text.scev.power.fail.no_soc",            "Install a System-on-Chip");
 
         addItem(ScevRegistry.EPOXY,              "Epoxy Solution");
         addItem(ScevRegistry.SILICA_COMPOUND,    "Silica Compound");
@@ -53,7 +80,9 @@ public class ScevLangProvider extends LanguageProvider {
         addItem(ScevRegistry.MEMORY_CHIP,        "Memory Chip");
         addItem(ScevRegistry.CHAR_DISPLAY,       "Character Display");
         addItem(ScevRegistry.GFX_DISPLAY,        "Graphics Display");
-        addItem(ScevRegistry.SOC,                "Integrated SE-1 SoC");
+        addItem(ScevRegistry.SOC1,               "SE-1 Micro SoC");
+        addItem(ScevRegistry.SOC2,               "SE-2 Embedded SoC");
+        addItem(ScevRegistry.SOC3,               "SE-4 Application SoC");
         addItem(ScevRegistry.SOLDERING_IRON,     "Pinecil Soldering Iron");
 
         addItem(ScevRegistry.FLASH_CHIP,         "Flash ROM Chip");
@@ -83,5 +112,6 @@ public class ScevLangProvider extends LanguageProvider {
         addBlock(ScevRegistry.TINKERPAD,      "Tinkerpad Laptop");
         addBlock(ScevRegistry.KEYBOARD,       "Keyboard");
         addBlock(ScevRegistry.KEYBOARD_MOUSE, "Keyboard with mice");
+        addBlock(ScevRegistry.MCU_BOARD,      "MCU Board");
     }
 }

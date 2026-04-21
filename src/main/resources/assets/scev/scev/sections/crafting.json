@@ -1,0 +1,10 @@
+{
+  "priority": 100,
+  "title": {
+    "text": { "translate": "itemGroup.scev.section.crafting" },
+    "background": "#bb4a2a10",
+    "color": "#fff5c060",
+    "secondary_color": "#ffb07030"
+  },
+  "sprite": "scev:banner"
+}

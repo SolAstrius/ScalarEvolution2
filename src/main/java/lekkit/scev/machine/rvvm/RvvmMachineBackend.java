@@ -7,6 +7,7 @@ package lekkit.scev.machine.rvvm;
 
 import com.mojang.logging.LogUtils;
 import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
@@ -82,6 +83,14 @@ public final class RvvmMachineBackend implements MachineBackend {
     private @Nullable RTL8169 nic;
     private @Nullable RvvmGpio gpio;
     private final List<NVMeDrive> nvmeDrives = new ArrayList<>();
+
+    /**
+     * Temp files written for custom-firmware raw-bytes loading.
+     * {@link RVVMMachine#loadBootrom} takes a path, not a buffer, so we
+     * spill the blob to disk once per boot and clean up on {@link #close}.
+     * Small — one entry per bring-your-own-bytes flash chip.
+     */
+    private final List<Path> tempFirmwareFiles = new ArrayList<>();
 
     private boolean closed;
 
@@ -171,12 +180,17 @@ public final class RvvmMachineBackend implements MachineBackend {
         boolean firmwareLoaded = false;
         if (spec.hasFirmware()) {
             MachineSpec.FirmwareSpec fw = spec.firmware();
-            if (fw.hasRegistryRef()) {
+            // Precedence: raw bytes > registry id > direct origin. Raw bytes
+            // is the custom-flash path and must win over any fallback ids
+            // the parser also emitted.
+            if (fw.hasRawBytes()) {
+                firmwareLoaded = loadRawBytesFirmware(m, spec, fw);
+            } else if (fw.hasRegistryRef()) {
                 firmwareLoaded = loadRegistryFirmware(m, spec, fw);
             } else if (fw.origin() != null) {
                 firmwareLoaded = loadDirectFirmware(m, spec, fw);
             } else {
-                LOG.warn("FirmwareSpec for machine {} has neither firmwareId nor origin — ignored",
+                LOG.warn("FirmwareSpec for machine {} has neither firmwareId nor origin nor rawBytes — ignored",
                         spec.uuid());
             }
         }
@@ -399,6 +413,37 @@ public final class RvvmMachineBackend implements MachineBackend {
         return false;
     }
 
+    /**
+     * Custom-firmware path: flash chip carries literal bytes in its data
+     * component. We spill them to a temp file (RVVM's loader takes a path,
+     * not a buffer) and hand the path to {@code rvvm_load_firmware}.
+     *
+     * <p>The file is tracked in {@link #tempFirmwareFiles} and deleted on
+     * {@link #close} so we don't leak {@code /tmp} entries across machine
+     * power cycles. Using a per-machine prefix + {@link Files#createTempFile}
+     * avoids clashes between concurrent machines sharing the same host.
+     *
+     * <p>This is the path player-authored programs travel when flashed
+     * into a chip via the future Programmer block.
+     */
+    private boolean loadRawBytesFirmware(RVVMMachine m, MachineSpec spec, MachineSpec.FirmwareSpec fw) {
+        byte[] bytes = fw.rawBytes().bytes();
+        try {
+            Path tmp = Files.createTempFile("scev-fw-" + fw.uuid() + "-", ".bin");
+            Files.write(tmp, bytes);
+            tempFirmwareFiles.add(tmp);
+            if (m.loadBootrom(tmp.toString())) {
+                LOG.info("Loaded custom firmware ({} bytes) for machine {} from {}",
+                        bytes.length, spec.uuid(), tmp);
+                return true;
+            }
+            LOG.warn("rvvm_load_firmware rejected custom blob at {} for machine {}", tmp, spec.uuid());
+        } catch (IOException e) {
+            LOG.error("Failed to spill custom firmware to temp file for machine {}", spec.uuid(), e);
+        }
+        return false;
+    }
+
     @Override
     public synchronized boolean start() {
         if (machine == null || closed) return false;
@@ -459,6 +504,12 @@ public final class RvvmMachineBackend implements MachineBackend {
         nic = null;
         gpio = null;
         nvmeDrives.clear();
+        // Clean up any custom-firmware temp files we spilled. Not critical
+        // if deletion fails (the OS reaps /tmp eventually) but worth trying.
+        for (Path tmp : tempFirmwareFiles) {
+            try { Files.deleteIfExists(tmp); } catch (IOException ignored) {}
+        }
+        tempFirmwareFiles.clear();
     }
 
     /* ------------------------------------------------------------------ */

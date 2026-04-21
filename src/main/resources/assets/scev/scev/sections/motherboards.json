@@ -1,0 +1,10 @@
+{
+  "priority": 500,
+  "title": {
+    "text": { "translate": "itemGroup.scev.section.motherboards" },
+    "background": "#bb0a2a10",
+    "color": "#ff90e060",
+    "secondary_color": "#ff508030"
+  },
+  "sprite": "scev:banner"
+}

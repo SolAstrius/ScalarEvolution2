@@ -47,6 +47,42 @@ public class ScevBlockStateProvider extends BlockStateProvider {
         objBlock(ScevRegistry.CRT_MONITOR,     "crt_monitor");
         objBlock(ScevRegistry.KEYBOARD,        "keyboard");
         objBlock(ScevRegistry.KEYBOARD_MOUSE,  "keyboard_mouse");
+        // MCU board uses a plain JSON "orientable" cube — front, side, top
+        // textures with automatic rotation based on HORIZONTAL_FACING. No
+        // OBJ mesh because the block is a simple box; matches OC1's
+        // Microcontroller shape.
+        orientableBlock(ScevRegistry.MCU_BOARD, "mcu_board");
+    }
+
+    /**
+     * Standard 6-face cube with three textures: front (the named face),
+     * side (used for left/right/back), and top (used for top/bottom). The
+     * vanilla {@code orientable} parent + {@code forAllStates} wiring
+     * rotates the model around Y to track the {@link DirectionalBlock#FACING}
+     * blockstate property.
+     */
+    private void orientableBlock(DeferredBlock<? extends DirectionalBlock> deferred, String name) {
+        ResourceLocation front = ScalarEvolution.rl("block/" + name + "_front");
+        ResourceLocation side  = ScalarEvolution.rl("block/" + name + "_side");
+        ResourceLocation top   = ScalarEvolution.rl("block/" + name + "_top");
+
+        BlockModelBuilder model = models().orientable(name, side, front, top);
+
+        Block block = deferred.get();
+        getVariantBuilder(block).forAllStates(state -> {
+            Direction facing = state.getValue(DirectionalBlock.FACING);
+            int yRot = switch (facing) {
+                case SOUTH -> 180;
+                case WEST  -> 270;
+                case EAST  -> 90;
+                default    -> 0;
+            };
+            return ConfiguredModel.builder()
+                    .modelFile(model)
+                    .rotationY(yRot)
+                    .build();
+        });
+        simpleBlockItem(block, model);
     }
 
     private void objBlock(DeferredBlock<? extends DirectionalBlock> deferred, String name) {
