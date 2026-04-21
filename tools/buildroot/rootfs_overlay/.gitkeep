@@ -1,0 +1,2 @@
+# This directory's contents are dropped into the guest rootfs at the
+# corresponding absolute paths. See ../README.md.

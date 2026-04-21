@@ -1,0 +1,4 @@
+# Anything dropped into this directory by the build is ephemeral —
+# checked-in artefacts live in src/main/resources/assets/scev/firmware/.
+output/
+*.log

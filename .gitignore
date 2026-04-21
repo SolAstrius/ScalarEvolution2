@@ -35,6 +35,9 @@ runs/
 logs/
 crash-reports/
 
+# Buildroot output (artefacts are committed under src/main/resources/assets/scev/firmware/)
+build-output/
+
 # Nix / direnv
 .direnv/
 
