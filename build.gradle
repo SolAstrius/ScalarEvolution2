@@ -65,6 +65,41 @@ sourceSets.main.resources { srcDir 'src/generated/resources' }
 dependencies {
     testImplementation 'org.junit.jupiter:junit-jupiter-api:5.11.3'
     testImplementation 'org.junit.jupiter:junit-jupiter-engine:5.11.3'
+
+    // Opus codec for server-side compression of the HDA audio stream.
+    // 48 kHz mono 16-bit PCM (768 kbps) -> Opus @ 64 kbps (12x smaller,
+    // music-grade quality). LWJGL 3.3.3 matches Minecraft 1.21.1's own
+    // LWJGL version, so there's no classloader/version conflict.
+    //
+    // Three-layer setup (required by NeoForge's module classloader):
+    //   - `compileOnly` — javac sees Opus at compile-time.
+    //   - `additionalRuntimeClasspath` — adds to runClient /
+    //     runGameTestServer game classpath OUTSIDE the mod module
+    //     system, so the ModuleClassLoader can find it. Plain
+    //     `implementation` puts classes on gradle's runtimeClasspath but
+    //     NeoForge's FML ModuleClassLoader doesn't see them — results
+    //     in NoClassDefFoundError at runtime in dev.
+    //   - `jarJar` — bundled INSIDE the shipped mod jar so end users'
+    //     Minecraft installs load it automatically via NeoForge's
+    //     nested-jar discovery, no separate library install needed.
+    //
+    // Natives: list all Minecraft-supported classifiers so the shipped
+    // jar is portable. NeoForge filters by runtime OS/arch at load.
+    compileOnly 'org.lwjgl:lwjgl-opus:3.3.3'
+    additionalRuntimeClasspath 'org.lwjgl:lwjgl-opus:3.3.3'
+    additionalRuntimeClasspath 'org.lwjgl:lwjgl-opus:3.3.3:natives-macos-arm64'
+    additionalRuntimeClasspath 'org.lwjgl:lwjgl-opus:3.3.3:natives-macos'
+    additionalRuntimeClasspath 'org.lwjgl:lwjgl-opus:3.3.3:natives-linux'
+    additionalRuntimeClasspath 'org.lwjgl:lwjgl-opus:3.3.3:natives-linux-arm64'
+    additionalRuntimeClasspath 'org.lwjgl:lwjgl-opus:3.3.3:natives-windows'
+    additionalRuntimeClasspath 'org.lwjgl:lwjgl-opus:3.3.3:natives-windows-arm64'
+    jarJar(group: 'org.lwjgl', name: 'lwjgl-opus', version: '[3.3.3,3.4)')
+    jarJar(group: 'org.lwjgl', name: 'lwjgl-opus', version: '[3.3.3,3.4)', classifier: 'natives-macos-arm64')
+    jarJar(group: 'org.lwjgl', name: 'lwjgl-opus', version: '[3.3.3,3.4)', classifier: 'natives-macos')
+    jarJar(group: 'org.lwjgl', name: 'lwjgl-opus', version: '[3.3.3,3.4)', classifier: 'natives-linux')
+    jarJar(group: 'org.lwjgl', name: 'lwjgl-opus', version: '[3.3.3,3.4)', classifier: 'natives-linux-arm64')
+    jarJar(group: 'org.lwjgl', name: 'lwjgl-opus', version: '[3.3.3,3.4)', classifier: 'natives-windows')
+    jarJar(group: 'org.lwjgl', name: 'lwjgl-opus', version: '[3.3.3,3.4)', classifier: 'natives-windows-arm64')
 }
 
 tasks.withType(JavaCompile).configureEach {
@@ -110,9 +145,13 @@ test {
 // natives are a CI-only story; a local `./gradlew runClient` only needs the
 // host OS's library.
 
+// Pointed at our fork's staging branch. pufit/RVVM#staging = LekKit/RVVM#staging
+// plus the pluggable HDA backend + JNI ring buffer API the mod relies on
+// for sound. When that work merges upstream into LekKit/RVVM staging, we
+// can flip the URL back to LekKit/RVVM and the branch stays the same.
 ext.rvvmRef        = 'staging'
 ext.rvvmSrcDir     = file("${buildDir}/rvvm-src")
-ext.rvvmUpstream   = 'https://github.com/LekKit/RVVM.git'
+ext.rvvmUpstream   = 'https://github.com/pufit/RVVM.git'
 
 /** Host OS / arch detection mirroring RVVM's output directory naming. */
 ext.rvvmHostTriple = {

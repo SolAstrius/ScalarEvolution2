@@ -236,15 +236,45 @@ class MachineSpecParserTest {
     }
 
     @Test
-    @DisplayName("GPIO card -> hasGpio; RTL8169 -> hasNic")
+    @DisplayName("GPIO card -> hasGpio; RTL8169 -> hasNic; SOUND_CARD -> hasSound")
     void pciCardKindDispatch() {
         ItemStack mbStack = new ItemStack(ScevRegistry.MOTHERBOARD3.get());
         MotherboardInventory mb = new MotherboardInventory(() -> mbStack);
         mb.setItem(MotherboardItem.SLOT_PCI_START,     new ItemStack(ScevRegistry.GPIO_CARD.get()));
         mb.setItem(MotherboardItem.SLOT_PCI_START + 1, new ItemStack(ScevRegistry.RTL8169.get()));
+        mb.setItem(MotherboardItem.SLOT_PCI_START + 2, new ItemStack(ScevRegistry.SOUND_CARD.get()));
         MachineSpec spec = MachineSpecParser.fromMotherboard(UUID.randomUUID(), mbStack, false);
         assertTrue(spec.hasGpio());
         assertTrue(spec.hasNic());
+        assertTrue(spec.hasSound(),
+                "SOUND_CARD in a PCI slot must flip spec.hasSound() on; the RvvmMachineBackend "
+                        + "reads this flag to decide whether to attach the HDA audio controller.");
+        assertFalse(spec.hasDisplay());
+    }
+
+    @Test
+    @DisplayName("No SOUND_CARD installed -> hasSound is false (default is opt-in)")
+    void noSoundCardMeansSilent() {
+        ItemStack mbStack = new ItemStack(ScevRegistry.MOTHERBOARD3.get());
+        MotherboardInventory mb = new MotherboardInventory(() -> mbStack);
+        mb.setItem(MotherboardItem.SLOT_PCI_START, new ItemStack(ScevRegistry.VGA_CARD.get()));
+        MachineSpec spec = MachineSpecParser.fromMotherboard(UUID.randomUUID(), mbStack, false);
+        assertFalse(spec.hasSound(),
+                "A machine without a SOUND_CARD must not attach the HDA device. Otherwise "
+                        + "every out-of-the-box machine would spin up a PCI sound controller "
+                        + "even when the player never installed one.");
+    }
+
+    @Test
+    @DisplayName("SOUND_CARD alone (no other PCI cards) -> hasSound, no display, no gpio, no nic")
+    void soundCardIsolated() {
+        ItemStack mbStack = new ItemStack(ScevRegistry.MOTHERBOARD1.get());
+        new MotherboardInventory(() -> mbStack)
+                .setItem(MotherboardItem.SLOT_PCI_START, new ItemStack(ScevRegistry.SOUND_CARD.get()));
+        MachineSpec spec = MachineSpecParser.fromMotherboard(UUID.randomUUID(), mbStack, false);
+        assertTrue(spec.hasSound());
+        assertFalse(spec.hasGpio());
+        assertFalse(spec.hasNic());
         assertFalse(spec.hasDisplay());
     }
 

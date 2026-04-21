@@ -12,6 +12,7 @@ import io.netty.buffer.Unpooled;
 import java.util.UUID;
 import lekkit.scev.network.DisplayPayload;
 import lekkit.scev.network.MachineResetPayload;
+import lekkit.scev.network.SoundFramePayload;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.server.Bootstrap;
@@ -71,6 +72,32 @@ class PayloadRoundtripTest {
         assertEquals(w, out.width());
         assertEquals(h, out.height());
         assertArrayEquals(pixels, out.pixels());
+    }
+
+    @Test
+    @DisplayName("SoundFramePayload preserves uuid and PCM bytes byte-for-byte")
+    void soundFramePayloadRoundtrip() {
+        UUID uuid = UUID.randomUUID();
+        // 20 ms of 48 kHz mono = 960 samples * 2 bytes.
+        byte[] pcm = new byte[1920];
+        for (int i = 0; i < pcm.length; i++) pcm[i] = (byte) ((i * 7) & 0xFF);
+        SoundFramePayload p = new SoundFramePayload(uuid, pcm);
+        ByteBuf buf = Unpooled.buffer();
+        SoundFramePayload.STREAM_CODEC.encode(buf, p);
+        SoundFramePayload out = SoundFramePayload.STREAM_CODEC.decode(buf);
+        assertEquals(uuid, out.machineUuid());
+        assertArrayEquals(pcm, out.pcm());
+        assertFalse(buf.isReadable(), "unread trailing bytes: " + buf.readableBytes());
+    }
+
+    @Test
+    @DisplayName("SoundFramePayload handles zero-length PCM (doesn't crash decode)")
+    void soundFramePayloadEmpty() {
+        SoundFramePayload p = new SoundFramePayload(UUID.randomUUID(), new byte[0]);
+        ByteBuf buf = Unpooled.buffer();
+        SoundFramePayload.STREAM_CODEC.encode(buf, p);
+        SoundFramePayload out = SoundFramePayload.STREAM_CODEC.decode(buf);
+        assertEquals(0, out.pcm().length);
     }
 
     @Test

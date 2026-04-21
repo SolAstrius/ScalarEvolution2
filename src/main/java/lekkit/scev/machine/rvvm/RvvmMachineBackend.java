@@ -25,6 +25,7 @@ import lekkit.rvvm.RTL8169;
 import lekkit.rvvm.RVVMMachine;
 import lekkit.rvvm.RVVMNative;
 import lekkit.rvvm.SiFiveGPIO;
+import lekkit.rvvm.SoundHDA;
 import lekkit.rvvm.Syscon;
 import lekkit.scev.machine.BootSplash;
 import lekkit.scev.machine.DemoBootrom;
@@ -40,6 +41,7 @@ import lekkit.scev.machine.storage.DiskTemplateRegistry;
 import lekkit.scev.machine.storage.ScevDiskTemplate;
 import lekkit.scev.server.FirmwareAssets;
 import lekkit.scev.server.NativeLoader;
+import lekkit.scev.server.SoundStreamManager;
 import lekkit.scev.server.StorageManager;
 import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
@@ -82,6 +84,8 @@ public final class RvvmMachineBackend implements MachineBackend {
     private @Nullable RvvmMouse mouse;
     private @Nullable RTL8169 nic;
     private @Nullable RvvmGpio gpio;
+    private @Nullable SoundHDA sound;
+    private @Nullable SoundStreamManager soundStream;
     private final List<NVMeDrive> nvmeDrives = new ArrayList<>();
 
     /**
@@ -274,6 +278,43 @@ public final class RvvmMachineBackend implements MachineBackend {
         // -- GPIO -----------------------------------------------------------
         if (spec.hasGpio()) {
             gpio = new RvvmGpio(new SiFiveGPIO(m));
+        }
+
+        // -- Sound HDA ------------------------------------------------------
+        // A SOUND_CARD in one of the PCI slots flips spec.hasSound() on
+        // (see MachineSpecParser). We attach RVVM's HDA controller, which
+        // emulates an Intel HDA + C-Media CM8888 codec — the guest kernel
+        // with CONFIG_SND_HDA_INTEL + CONFIG_SND_HDA_GENERIC can enumerate
+        // and drive it via ALSA's {@code default} PCM device.
+        //
+        // The server-side audio pipeline:
+        //   guest PCM → RVVM HDA worker thread → SoundSink (this callback)
+        //            → SoundStreamManager downsamples 192 kHz → 48 kHz
+        //            → on each server tick, packetises 20 ms frames
+        //            → dispatched to every player within the machine's
+        //              jukebox-like audible radius (64 blocks)
+        //            → client-side SoundStreamPlayer queues onto an
+        //              OpenAL positional streaming source
+        //
+        // Teardown: SoundHDA is a PCIDevice; the machine's free()/close()
+        // walks all attached devices. We do need to unregister the
+        // SoundStreamManager so its static MANAGERS map doesn't leak.
+        if (spec.hasSound()) {
+            // Attach with a native ring buffer; SoundStreamManager drains
+            // it from the server tick. See SoundHDA.hasRing() for why
+            // we don't use a direct Java callback.
+            soundStream = SoundStreamManager.create(spec.uuid());
+            sound = new SoundHDA(m, /* useRing */ true);
+            if (!sound.isValid()) {
+                LOG.warn("[scev-audio] SoundHDA failed to attach for machine {} — check whether "
+                        + "librvvm was built with the sound_hda_init_with_ring JNI entry and "
+                        + "whether the PCI bus is reachable. Guest will see no HDA device.",
+                        spec.uuid());
+                SoundStreamManager.unregister(spec.uuid());
+                soundStream = null;
+            } else {
+                soundStream.bindDevice(sound);
+            }
         }
 
         // -- Bootrom fallback -----------------------------------------------
@@ -503,6 +544,11 @@ public final class RvvmMachineBackend implements MachineBackend {
         mouse = null;
         nic = null;
         gpio = null;
+        sound = null;
+        if (soundStream != null && spec != null) {
+            SoundStreamManager.unregister(spec.uuid());
+            soundStream = null;
+        }
         nvmeDrives.clear();
         // Clean up any custom-firmware temp files we spilled. Not critical
         // if deletion fails (the OS reaps /tmp eventually) but worth trying.

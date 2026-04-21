@@ -59,5 +59,18 @@ public final class ScevClient {
             MachineManager.unpauseAllMachines();
             lastPaused = false;
         }
+
+        // Drain queued PCM into OpenAL buffers, advance playback, reap idle
+        // sources. Runs here (on the client tick thread) so every OpenAL
+        // call stays on the audio-context thread. Netty handlers don't
+        // touch OpenAL directly — they only buffer bytes for this tick.
+        SoundStreamPlayer.clientTick();
+
+        // On disconnect (mc.level becomes null after being non-null), drop
+        // every streaming source so we don't leak OpenAL handles into the
+        // next connection.
+        if (mc.level == null && SoundStreamPlayer.liveSourceCount() > 0) {
+            SoundStreamPlayer.destroyAll();
+        }
     }
 }

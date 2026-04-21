@@ -58,6 +58,11 @@ public final class ScalarEvolution {
 
         // Game event bus (not mod bus)
         NeoForge.EVENT_BUS.addListener(ScalarEvolution::onServerStopping);
+        // SoundStreamManager.onServerTick dispatches queued PCM frames to
+        // nearby players every server tick. Registering by method reference
+        // against the explicit event type bypasses @SubscribeEvent scanning —
+        // the method is static and self-contained.
+        NeoForge.EVENT_BUS.addListener(lekkit.scev.server.SoundStreamManager::onServerTick);
     }
 
     private static void onCommonSetup(FMLCommonSetupEvent event) {

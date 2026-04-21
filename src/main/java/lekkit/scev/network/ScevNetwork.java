@@ -35,6 +35,8 @@ public final class ScevNetwork {
                 ScevNetwork::handleResetOnServer);
         r.playToClient(DisplayPayload.TYPE, DisplayPayload.STREAM_CODEC,
                 ScevNetwork::handleDisplayOnClient);
+        r.playToClient(SoundFramePayload.TYPE, SoundFramePayload.STREAM_CODEC,
+                ScevNetwork::handleSoundFrameOnClient);
     }
 
     /* ---------------- Handlers ---------------- */
@@ -79,5 +81,9 @@ public final class ScevNetwork {
 
     private static void handleDisplayOnClient(DisplayPayload payload, IPayloadContext ctx) {
         lekkit.scev.client.DisplayManager.acceptRemote(payload);
+    }
+
+    private static void handleSoundFrameOnClient(SoundFramePayload payload, IPayloadContext ctx) {
+        lekkit.scev.client.SoundStreamPlayer.acceptRemote(payload);
     }
 }

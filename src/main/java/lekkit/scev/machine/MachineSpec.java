@@ -35,6 +35,7 @@ public record MachineSpec(
         @Nullable DisplaySpec display,
         boolean hasNic,
         boolean hasGpio,
+        boolean hasSound,
         List<DiskSpec> nvmeDrives,
         String cmdline,
         BootromMode bootromMode) {
@@ -230,6 +231,7 @@ public record MachineSpec(
         private @Nullable DisplaySpec display;
         private boolean hasNic;
         private boolean hasGpio;
+        private boolean hasSound;
         private final List<DiskSpec> nvmeDrives = new ArrayList<>();
         private String cmdline = "root=/dev/nvme0n1 rw";
         private BootromMode bootromMode = BootromMode.FIRMWARE_ELSE_DEMO;
@@ -245,13 +247,14 @@ public record MachineSpec(
         public Builder defaultDisplay() { this.display = DEFAULT_DISPLAY; return this; }
         public Builder hasNic(boolean v) { this.hasNic = v; return this; }
         public Builder hasGpio(boolean v) { this.hasGpio = v; return this; }
+        public Builder hasSound(boolean v) { this.hasSound = v; return this; }
         public Builder nvme(DiskSpec v) { this.nvmeDrives.add(v); return this; }
         public Builder cmdline(String v) { this.cmdline = v; return this; }
         public Builder bootromMode(BootromMode v) { this.bootromMode = v; return this; }
 
         public MachineSpec build() {
             return new MachineSpec(uuid, memMb, smp, isa, firmware, kernel, display,
-                    hasNic, hasGpio, nvmeDrives, cmdline, bootromMode);
+                    hasNic, hasGpio, hasSound, nvmeDrives, cmdline, bootromMode);
         }
     }
 }

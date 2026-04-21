@@ -12,6 +12,8 @@ import lekkit.scev.machine.KeyboardDevice;
 import lekkit.scev.machine.MachineBackend;
 import lekkit.scev.machine.MachineSpec;
 import lekkit.scev.machine.MouseDevice;
+import net.minecraft.core.BlockPos;
+import net.minecraft.server.level.ServerLevel;
 import org.jetbrains.annotations.Nullable;
 
 /**
@@ -34,6 +36,15 @@ public class MachineState {
     private boolean unloaded;
     private boolean persisting = true;
 
+    /**
+     * World location of the block entity hosting this machine. Set by the
+     * BE in its {@code powerOn()} after MachineManager hands it a state.
+     * Null until then — callers (e.g. {@link SoundStreamManager}) must
+     * gracefully skip dispatch when not yet located.
+     */
+    private volatile @Nullable ServerLevel level;
+    private volatile @Nullable BlockPos pos;
+
     public MachineState(MachineSpec spec, MachineBackend backend) {
         this.spec = spec;
         this.backend = backend;
@@ -45,6 +56,22 @@ public class MachineState {
 
     public void setPersisting(boolean p) { persisting = p; }
     public boolean isPersisting() { return persisting; }
+
+    /**
+     * Associate this machine with the world location of its hosting block
+     * entity. Called from the BE's {@code powerOn} path. Safe to call
+     * repeatedly — overwrites previous location.
+     */
+    public void setLocation(ServerLevel level, BlockPos pos) {
+        this.level = level;
+        this.pos = pos;
+    }
+
+    /** The {@link ServerLevel} hosting this machine, or null if not yet located. */
+    public @Nullable ServerLevel getLevel() { return level; }
+
+    /** The block position hosting this machine, or null if not yet located. */
+    public @Nullable BlockPos getPos() { return pos; }
 
     /* ---------------- Device accessors ---------------- */
 

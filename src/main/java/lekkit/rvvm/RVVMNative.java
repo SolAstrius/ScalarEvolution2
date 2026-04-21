@@ -127,6 +127,47 @@ public class RVVMNative {
     // Returns PCI device handle
     public static native long rtl8169_init(long pci_bus, long tap);
     public static native long nvme_init(long pci_bus, String image_path, boolean rw);
+    public static native long sound_hda_init_auto(long machine);
+
+    /**
+     * Attach an HDA PCI device that stages PCM into a native ring buffer.
+     * Java polls the buffer on its own schedule via {@link #sound_hda_poll}.
+     *
+     * <p>Design note: we'd prefer a direct callback into Java, but on
+     * JDK 21 / macOS arm64 {@code AttachCurrentThread(AsDaemon)} fails
+     * with {@code JNI_ERR} when called from RVVM's pthread-created stream
+     * worker. Staging through a native ring and polling from a
+     * JVM-native thread sidesteps the attach problem entirely.
+     *
+     * <p>Ring capacity: 1 MiB, ~2.7 s at 192 kHz mono 16-bit. Overflow
+     * drops oldest bytes (latency over completeness).
+     *
+     * @param machine       Pointer to the RVVM machine.
+     * @param pciDevOut     One-element long[] receiving the
+     *                      {@code pci_dev_t*} for {@link PCIDevice#setPCIHandle}.
+     * @return Opaque handle to the native ring (pass to {@link #sound_hda_poll}
+     *         and {@link #sound_hda_stats}), or 0 on failure.
+     */
+    public static native long sound_hda_init_with_ring(long machine, long[] pciDevOut);
+
+    /**
+     * Drain up to {@code out.length} PCM bytes from the ring into the
+     * supplied Java array. Returns the number of bytes actually read.
+     * Safe to call from any JVM-native thread — takes a mutex internally.
+     *
+     * @param sinkHandle Ring handle from {@link #sound_hda_init_with_ring}.
+     * @param out        Destination byte buffer.
+     * @return Number of bytes written to {@code out}.
+     */
+    public static native int sound_hda_poll(long sinkHandle, byte[] out);
+
+    /**
+     * Query a monotonic counter from the native ring.
+     *
+     * @param sinkHandle Ring handle.
+     * @param which      0=total pushed bytes, 1=total popped, 2=dropped, 3=current occupancy.
+     */
+    public static native long sound_hda_stats(long sinkHandle, int which);
 
     // Returns HID mouse handle
     public static native long hid_mouse_init_auto(long machine);

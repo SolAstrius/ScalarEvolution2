@@ -9,6 +9,10 @@ on:
 
 env:
   NEO_VERSION: "21.1.209"
+  # Our fork's staging is LekKit/RVVM#staging + the pluggable HDA backend
+  # and JNI ring API the mod's audio pipeline depends on. Flip the
+  # `repository:` back to LekKit/RVVM below once those changes merge
+  # upstream; this env var stays 'staging' either way.
   RVVM_REF: "staging"
 
 jobs:
@@ -22,7 +26,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          repository: LekKit/RVVM
+          repository: pufit/RVVM
           ref: ${{ env.RVVM_REF }}
           path: RVVM
       - name: Build librvvm.so (linux-x86_64)
@@ -37,7 +41,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          repository: LekKit/RVVM
+          repository: pufit/RVVM
           ref: ${{ env.RVVM_REF }}
           path: RVVM
       - name: Build librvvm.dylib (macos-aarch64)
@@ -52,7 +56,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          repository: LekKit/RVVM
+          repository: pufit/RVVM
           ref: ${{ env.RVVM_REF }}
           path: RVVM
       - uses: msys2/setup-msys2@v2

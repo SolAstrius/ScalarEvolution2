@@ -202,6 +202,260 @@ public final class ScevGameTests {
     }
 
     /**
+     * Integration: installing a {@code SOUND_CARD} in a PCI slot must make
+     * the parser emit {@code spec.hasSound() = true} and the backend must
+     * attach RVVM's HDA controller without crashing.
+     *
+     * <p>The full audio pipeline is layered:
+     * <ul>
+     *   <li><b>Here (Java Phases 1–3).</b> Parser flag flows to the backend;
+     *       {@code SoundHDA.sound_hda_init_auto} returns a non-zero PCI
+     *       device pointer; the machine powers on and keeps running.</li>
+     *   <li><b>Phase 4 (RVVM C-side CoreAudio backend).</b> Until that
+     *       lands, macOS builds of librvvm compile the HDA controller but
+     *       no host audio backend — the stream worker's PCM write is a
+     *       no-op, so the PCI device enumerates but produces silence. That
+     *       still means "the wiring works"; audible output needs Phase 4.</li>
+     *   <li><b>Phase 5 (Buildroot kernel + alsa-utils).</b> For the guest
+     *       to actually drive the device we need {@code CONFIG_SND_HDA_INTEL}
+     *       plus {@code aplay}. Validated by {@code dmesg | grep hda} on the
+     *       guest once that kernel ships. Not asserted here.</li>
+     * </ul>
+     *
+     * <p>What <i>this</i> test catches: someone reverts the parser's
+     * {@code case SOUND} back to a stub, someone removes
+     * {@code SoundHDA.java}, or someone forgets to rebuild librvvm with the
+     * new JNI wrapper ({@code Java_lekkit_rvvm_RVVMNative_sound_1hda_1init_1auto}).
+     * Any of those would surface as a spec mismatch or a native crash on
+     * power-on.
+     *
+     * <p>No flash chip is installed on purpose — the demo bootrom path is
+     * the fastest way to prove "the sound card doesn't crash the VM" without
+     * waiting for a full Linux boot. See {@link #linux_kernel_boots_with_sound_card}
+     * for the full-stack version.
+     */
+    @GameTest(templateNamespace = ScalarEvolution.MODID, template = "empty", timeoutTicks = 100)
+    public static void workstation_sound_card_attaches(GameTestHelper helper) {
+        BlockPos pos = new BlockPos(1, 1, 1);
+        helper.setBlock(pos, ScevRegistry.WORKSTATION.get().defaultBlockState());
+        if (!(helper.getBlockEntity(pos) instanceof ComputerCaseBlockEntity case_)) {
+            helper.fail("Workstation BE not created");
+            return;
+        }
+
+        // Minimal loadout: CPU + RAM + SOUND_CARD, no flash (demo bootrom path).
+        ItemStack mbStack = new ItemStack(ScevRegistry.MOTHERBOARD1.get());
+        MotherboardInventory inv = new MotherboardInventory(() -> mbStack);
+        inv.setItem(MotherboardItem.SLOT_CPU, new ItemStack(ScevRegistry.CPU1.get()));
+        inv.setItem(MotherboardItem.SLOT_RAM_START, new ItemStack(ScevRegistry.RAM_SODIMM1.get()));
+        inv.setItem(MotherboardItem.SLOT_PCI_START, new ItemStack(ScevRegistry.SOUND_CARD.get()));
+        case_.setItem(0, mbStack);
+        case_.powerOn();
+
+        MachineState state = MachineManager.getMachineState(case_.getMachineUUID());
+        if (state == null) {
+            helper.fail("MachineState was not created; librvvm may not be loadable on this host");
+            return;
+        }
+
+        try {
+            // -- Spec-side assertion (parser contract) ---------------------
+            MachineSpec spec = state.getBackend().spec();
+            if (!spec.hasSound()) {
+                helper.fail("Parser did not set spec.hasSound() even though SOUND_CARD was in "
+                        + "the PCI slot. Check MachineSpecParser's PCI-card switch — the SOUND "
+                        + "branch must call builder.hasSound(true).");
+                return;
+            }
+
+            // -- Backend-side assertion (native attach contract) -----------
+            // powerOn succeeded, MachineState exists, and the backend is
+            // still valid. If sound_hda_init_auto crashed or returned 0 in
+            // a way that tripped RVVM into an invalid state, isValid()
+            // would be false.
+            if (!state.getBackend().isValid()) {
+                helper.fail("Backend is not valid after powerOn with a SOUND_CARD installed — "
+                        + "sound_hda_init_auto likely crashed or put the machine into an "
+                        + "unrecoverable state. Check the JNI wrapper and that librvvm was "
+                        + "rebuilt with the sound_1hda_1init_1auto export.");
+                return;
+            }
+
+            // Small delay so the HDA stream worker has time to start (if the
+            // guest driver speculatively tickled it during early enumeration).
+            // If the worker dereferences a NULL subsystem.write callback on
+            // macOS (no ALSA, no CoreAudio), we'd see the VM drop to an
+            // invalid state.
+            helper.runAfterDelay(20, () -> {
+                try {
+                    if (!state.getBackend().isValid()) {
+                        helper.fail("Backend went invalid shortly after powerOn — suggests "
+                                + "the HDA stream worker crashed. On macOS without a host "
+                                + "audio backend the worker must be a no-op, not a crash.");
+                        return;
+                    }
+                    if (!state.getBackend().isRunning()) {
+                        helper.fail("Machine isn't running after powerOn with sound card. "
+                                + "Installing a SOUND_CARD must not halt the VM.");
+                        return;
+                    }
+                    helper.succeed();
+                } finally {
+                    case_.powerOff();
+                }
+            });
+        } catch (Throwable t) {
+            case_.powerOff();
+            helper.fail("Sound card attach threw: " + t);
+        }
+    }
+
+    /**
+     * End-to-end: a Linux-booting machine with a {@code SOUND_CARD}
+     * alongside the VGA card must reach the same "kernel still running
+     * after N seconds" liveness milestone as the sound-less configuration
+     * ({@link #linux_kernel_boots_and_draws_fbcon}).
+     *
+     * <p>This is the "sound card doesn't break Linux" regression test.
+     * Specifically catches:
+     * <ul>
+     *   <li>RVVM's HDA PCI device advertising a config-space layout the
+     *       guest OS chokes on during {@code pci_scan}.</li>
+     *   <li>The HDA stream worker trampling memory the kernel is using
+     *       during early init.</li>
+     *   <li>The HDA device's MMIO BAR[0] overlapping another device's
+     *       region after a future RVVM update.</li>
+     * </ul>
+     *
+     * <p>Waits only ~10 s instead of the 20 s used by the fbcon test —
+     * we're not verifying fbcon here, just that the kernel doesn't panic
+     * during {@code pci_scan_bus} or {@code snd-hda-intel} probe (if the
+     * kernel happens to have the driver compiled in; currently it does
+     * not, which means the HDA device enumerates as an unclaimed PCI
+     * function and Linux moves on — still a valid boot).
+     */
+    @GameTest(templateNamespace = ScalarEvolution.MODID, template = "empty", timeoutTicks = 1200)
+    public static void linux_kernel_boots_with_sound_card(GameTestHelper helper) {
+        BlockPos pos = new BlockPos(1, 1, 1);
+        helper.setBlock(pos, ScevRegistry.WORKSTATION.get().defaultBlockState());
+        if (!(helper.getBlockEntity(pos) instanceof ComputerCaseBlockEntity case_)) {
+            helper.fail("Workstation BE not created");
+            return;
+        }
+
+// Linux loadout (mirrors linux_kernel_boots_and_draws_fbcon) plus a
+        // SOUND_CARD in PCI slot 9. MOTHERBOARD1 has 2 PCI slots enabled
+        // (8, 9) so VGA + SOUND fit.
+        ItemStack mbStack = new ItemStack(ScevRegistry.MOTHERBOARD1.get());
+        MotherboardInventory inv = new MotherboardInventory(() -> mbStack);
+        inv.setItem(MotherboardItem.SLOT_CPU, new ItemStack(ScevRegistry.CPU1.get()));
+        inv.setItem(MotherboardItem.SLOT_FLASH, new ItemStack(ScevRegistry.FLASH_CHIP.get()));
+        inv.setItem(MotherboardItem.SLOT_RAM_START, new ItemStack(ScevRegistry.RAM_SODIMM1.get()));
+        inv.setItem(MotherboardItem.SLOT_PCI_START, new ItemStack(ScevRegistry.VGA_CARD.get()));
+        inv.setItem(MotherboardItem.SLOT_PCI_START + 1, new ItemStack(ScevRegistry.SOUND_CARD.get()));
+        case_.setItem(0, mbStack);
+        case_.powerOn();
+
+        MachineState state = MachineManager.getMachineState(case_.getMachineUUID());
+        if (state == null) {
+            helper.fail("No MachineState after powerOn — librvvm may not be loadable on this host");
+            return;
+        }
+
+        // Parser-side sanity: both VGA (display) and SOUND_CARD must register.
+        MachineSpec spec = state.getBackend().spec();
+        if (!spec.hasDisplay()) {
+            helper.fail("VGA card + SOUND_CARD in PCI slots, but spec.hasDisplay() is false. "
+                    + "Parser regressed: SOUND_CARD handling must not eat the VGA card's bit.");
+            case_.powerOff();
+            return;
+        }
+        if (!spec.hasSound()) {
+            helper.fail("SOUND_CARD in PCI slot 9, but spec.hasSound() is false. "
+                    + "Parser must scan every enabled PCI slot, not just the first.");
+            case_.powerOff();
+            return;
+        }
+
+        // Sanity: RAM was clamped to the Linux floor.
+        if (spec.memMb() < LinuxFirmware.MIN_RAM_MB) {
+            helper.fail("RAM wasn't clamped to the Linux firmware floor. Got "
+                    + spec.memMb() + " MiB, expected >= " + LinuxFirmware.MIN_RAM_MB);
+            case_.powerOff();
+            return;
+        }
+
+        // Give the machine 10 seconds to boot. If the sound card breaks
+        // early boot (kernel panic during pci_scan, or HDA stream worker
+        // trashing memory), the machine will stop running well before
+        // the 10 s mark.
+        helper.runAfterDelay(10, () -> {
+            try {
+                // Verify kernel landed at LOAD_ADDR — this is the same
+                // proof-of-life check the fbcon test does at 20 s. If the
+                // HDA device's MMIO BAR overlapped the kernel region, the
+                // bytes here would be clobbered.
+                ByteBuffer atKernel = state.getBackend().readMemory(
+                        KernelStub.LOAD_ADDR + LINUX_MAGIC_OFFSET, 8);
+                if (atKernel == null) {
+                    helper.fail("readMemory at kernel LOAD_ADDR returned null — "
+                            + "DMA API broken or sound card clobbered the backend state.");
+                    return;
+                }
+                byte[] expectedMagic = {'R', 'I', 'S', 'C', 'V', 0, 0, 0};
+                for (int i = 0; i < expectedMagic.length; i++) {
+                    if (atKernel.get(i) != expectedMagic[i]) {
+                        helper.fail("Linux RV64 boot magic missing at 0x"
+                                + Long.toHexString(KernelStub.LOAD_ADDR + LINUX_MAGIC_OFFSET)
+                                + " after 10 s of boot with SOUND_CARD installed. "
+                                + "The HDA device may be corrupting guest memory — "
+                                + "check PCI BAR placement vs. the kernel load region.");
+                        return;
+                    }
+                }
+
+                // Block for ~8 s more. The RVVM HART runs on its own thread,
+                // so wall time is enough for Linux to reach late init where
+                // pci_scan would have enumerated the HDA device.
+                try {
+                    Thread.sleep(8000);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+
+                if (!state.getBackend().isRunning()) {
+                    helper.fail("Machine stopped running after ~18 s of boot time with "
+                            + "SOUND_CARD installed. Linux may have panicked on the HDA "
+                            + "device — check UART output for a trace. If the fbcon test "
+                            + "still passes, the regression is sound-card-specific.");
+                    return;
+                }
+
+                helper.succeed();
+            } finally {
+                case_.powerOff();
+            }
+        });
+    }
+
+    // Full-stack E2E test (linux_guest_audio_reaches_sound_stream_manager)
+    // was removed 2026-04-20: it relied on an /etc/init.d/S99playwav that
+    // looped aplay on every boot, which made interactive play unpleasant.
+    // The guest rootfs still ships /root/test.wav so the player can
+    // `aplay /root/test.wav` manually via the in-game shell for audio
+    // verification.
+    //
+// Coverage that remains:
+    //   - Unit tests: SoundStreamManager downsample + framing math,
+    //     SoundFramePayload codec roundtrip.
+    //   - workstation_sound_card_attaches: spec -> backend wiring, no crash.
+    //   - linux_kernel_boots_with_sound_card: Linux boots with a SOUND_CARD
+    //     installed, stays running (proves the card doesn't break early boot).
+    //
+    // Full audio playback is now a manual verification (documented in
+    // docs/SOUND_INTEGRATION_PLAN.md §Manual verification).
+
+    /**
      * Redstone input: place a workstation with a GPIO card, apply a redstone
      * torch adjacent to it, verify the GPIO card's pin bitmap sees the
      * corresponding direction's pin set.

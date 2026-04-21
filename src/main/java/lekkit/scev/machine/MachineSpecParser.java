@@ -242,7 +242,7 @@ public final class MachineSpecParser {
                     case NET -> builder.hasNic(true);
                     case VGA -> hasVga = true;
                     case GPIO -> builder.hasGpio(true);
-                    case SOUND -> { /* not yet implemented */ }
+                    case SOUND -> builder.hasSound(true);
                 }
             }
         }

@@ -74,7 +74,17 @@ public abstract class ComputerCaseBlockEntity extends ScevBlockEntity
     @Override
     public void powerOn() {
         MachineState state = initMachineState();
-        if (state != null) state.start();
+        if (state != null) {
+            // Hand the machine its world location so systems that broadcast
+            // per-machine packets (e.g. SoundStreamManager) know where to
+            // send them. Only the server-side ServerLevel is meaningful for
+            // packet dispatch; on the client-side integrated server both
+            // sides agree and this is still ServerLevel.
+            if (level instanceof net.minecraft.server.level.ServerLevel sl) {
+                state.setLocation(sl, worldPosition);
+            }
+            state.start();
+        }
     }
 
     @Override

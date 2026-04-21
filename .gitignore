@@ -43,3 +43,7 @@ AGENTS.md
 README.md
 docs/
 .claude/
+
+# Dev-only audio test material
+*.mp3
+*.wav

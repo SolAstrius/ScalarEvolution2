@@ -41,12 +41,26 @@ class MachineSpecTest {
         assertFalse(s.hasFirmware());
         assertFalse(s.hasNic());
         assertFalse(s.hasGpio());
+        assertFalse(s.hasSound(),
+                "Default spec must not attach a sound card — opt-in via the sound_card PCI slot.");
         assertEquals("root=/dev/nvme0n1 rw", s.cmdline());
         assertTrue(s.nvmeDrives().isEmpty());
         assertFalse(s.hasKernel(),
                 "Default spec must not carry a KernelSpec — only the flash-chip path opts in.");
         assertEquals(MachineSpec.BootromMode.FIRMWARE_ELSE_DEMO, s.bootromMode(),
                 "Default bootrom mode must prefer real firmware (otherwise out-of-box is a demo loop).");
+    }
+
+    @Test
+    @DisplayName("Builder.hasSound() flows through to the record")
+    void builderHasSoundChain() {
+        MachineSpec on = MachineSpec.builder(UUID.randomUUID()).hasSound(true).build();
+        assertTrue(on.hasSound(),
+                "Builder.hasSound(true) must propagate to the record; the RvvmMachineBackend "
+                        + "reads spec.hasSound() to decide whether to attach the SoundHDA device.");
+
+        MachineSpec off = MachineSpec.builder(UUID.randomUUID()).hasSound(false).build();
+        assertFalse(off.hasSound());
     }
 
     @Test
@@ -63,6 +77,7 @@ class MachineSpecTest {
                 .display(new MachineSpec.DisplaySpec(800, 600))
                 .hasNic(true)
                 .hasGpio(true)
+                .hasSound(true)
                 .nvme(new MachineSpec.DiskSpec(diskUuid, 1024, "disk.img"))
                 .cmdline("quiet")
                 .build();
@@ -74,6 +89,7 @@ class MachineSpecTest {
         assertEquals(600, s.display().height());
         assertTrue(s.hasNic());
         assertTrue(s.hasGpio());
+        assertTrue(s.hasSound());
         assertEquals(1, s.nvmeDrives().size());
         assertEquals("quiet", s.cmdline());
     }
@@ -117,7 +133,8 @@ class MachineSpecTest {
     @DisplayName("null nvmeDrives list is treated as empty")
     void nullNvmeNormalised() {
         MachineSpec s = new MachineSpec(
-                UUID.randomUUID(), 64, 1, "rv64", null, null, null, false, false, null, "cmdline",
+                UUID.randomUUID(), 64, 1, "rv64", null, null, null,
+                false, false, false, null, "cmdline",
                 MachineSpec.BootromMode.FIRMWARE_ELSE_DEMO);
         assertNotNull(s.nvmeDrives());
         assertTrue(s.nvmeDrives().isEmpty());
@@ -163,7 +180,7 @@ class MachineSpecTest {
     void rejectsNullBootromMode() {
         assertThrows(NullPointerException.class,
                 () -> new MachineSpec(UUID.randomUUID(), 64, 1, "rv64", null, null, null,
-                        false, false, null, "cmdline", null));
+                        false, false, false, null, "cmdline", null));
     }
 
     @Test
