@@ -79,10 +79,107 @@ jobs:
           path: RVVM/release.windows.x86_64/rvvm.dll
 
   # ---------------------------------------------------------------------
+  # Build libscev_h264 (JNI wrapper + statically-linked OpenH264 from
+  # the vendored vendor/openh264/ tree) for every target platform. Same
+  # artifact-upload-then-download pattern as the RVVM natives above.
+  #
+  # Toolchain: `zig cc` / `zig c++`. Zig bundles clang + lld + libc
+  # headers; the bundled libc++ means the resulting .so has no runtime
+  # libstdc++ dependency. Each platform runner grabs zig via
+  # mlugg/setup-zig and invokes our native/openh264-jni/Makefile.
+  # ---------------------------------------------------------------------
+  natives-h264-linux-x64:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Build libscev_h264.so (linux-x86_64)
+        run: |
+          make -C native/openh264-jni -j$(nproc) \
+            JAVA_HOME="$JAVA_HOME" \
+            OPENH264_SRC="$GITHUB_WORKSPACE/vendor/openh264" \
+            OUTPUT="$GITHUB_WORKSPACE/libscev_h264.so"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: libscev_h264-linux-x86_64
+          path: libscev_h264.so
+
+  natives-h264-macos-arm64:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Build libscev_h264.dylib (macos-aarch64)
+        run: |
+          make -C native/openh264-jni -j$(sysctl -n hw.ncpu) \
+            JAVA_HOME="$JAVA_HOME" \
+            OPENH264_SRC="$GITHUB_WORKSPACE/vendor/openh264" \
+            OUTPUT="$GITHUB_WORKSPACE/libscev_h264.dylib"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: libscev_h264-macos-aarch64
+          path: libscev_h264.dylib
+
+  natives-h264-windows-x64:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          install: make
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Build scev_h264.dll (windows-x86_64)
+        shell: msys2 {0}
+        # zig was installed on the Windows runner outside MSYS2; put its
+        # dir on PATH inside the MSYS2 shell so `zig cc` / `zig c++`
+        # resolve when make invokes them. JAVA_HOME from GitHub env is
+        # Windows-style; convert to MSYS-style for the header include
+        # paths our Makefile constructs.
+        run: |
+          export PATH="$(cygpath -u "$RUNNER_TOOL_CACHE")/zig/bin:$PATH"
+          export JAVA_HOME_MSYS=$(cygpath -u "$JAVA_HOME")
+          make -C native/openh264-jni -j$(nproc) \
+            JAVA_HOME="$JAVA_HOME_MSYS" \
+            OPENH264_SRC="$(cygpath -u "$GITHUB_WORKSPACE")/vendor/openh264" \
+            OUTPUT="$(cygpath -u "$GITHUB_WORKSPACE")/scev_h264.dll"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: libscev_h264-windows-x86_64
+          path: scev_h264.dll
+
+  # ---------------------------------------------------------------------
   # Main build + test job.
   # ---------------------------------------------------------------------
   build:
-    needs: [natives-linux-x64, natives-macos-arm64, natives-windows-x64]
+    needs:
+      - natives-linux-x64
+      - natives-macos-arm64
+      - natives-windows-x64
+      - natives-h264-linux-x64
+      - natives-h264-macos-arm64
+      - natives-h264-windows-x64
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -96,20 +193,36 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Download Linux native
+      - name: Download librvvm (linux)
         uses: actions/download-artifact@v4
         with:
           name: librvvm-linux-x86_64
           path: src/main/resources/natives/linux-x86_64
-      - name: Download macOS native
+      - name: Download librvvm (macOS)
         uses: actions/download-artifact@v4
         with:
           name: librvvm-macos-aarch64
           path: src/main/resources/natives/macos-aarch64
-      - name: Download Windows native
+      - name: Download librvvm (Windows)
         uses: actions/download-artifact@v4
         with:
           name: librvvm-windows-x86_64
+          path: src/main/resources/natives/windows-x86_64
+
+      - name: Download libscev_h264 (linux)
+        uses: actions/download-artifact@v4
+        with:
+          name: libscev_h264-linux-x86_64
+          path: src/main/resources/natives/linux-x86_64
+      - name: Download libscev_h264 (macOS)
+        uses: actions/download-artifact@v4
+        with:
+          name: libscev_h264-macos-aarch64
+          path: src/main/resources/natives/macos-aarch64
+      - name: Download libscev_h264 (Windows)
+        uses: actions/download-artifact@v4
+        with:
+          name: libscev_h264-windows-x86_64
           path: src/main/resources/natives/windows-x86_64
 
       - name: List bundled natives

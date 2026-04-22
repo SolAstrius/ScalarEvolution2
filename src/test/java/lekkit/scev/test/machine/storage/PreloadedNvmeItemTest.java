@@ -75,12 +75,14 @@ class PreloadedNvmeItemTest {
     }
 
     @Test
-    @DisplayName("Registered NVME_PRELOADED item reports BUILDROOT template id")
-    void registeredItemHasBuildrootTemplate() {
+    @DisplayName("Registered NVME_PRELOADED item reports ALPINE template id")
+    void registeredItemHasAlpineTemplate() {
         PreloadedNvmeItem item = ScevRegistry.NVME_PRELOADED.get();
-        assertEquals(DiskTemplateRegistry.BUILDROOT, item.getDefaultTemplateId(),
-                "ScevRegistry.NVME_PRELOADED must be constructed with DiskTemplateRegistry.BUILDROOT. "
-                        + "Changing the default? Update ScevRegistry AND this test together.");
+        assertEquals(DiskTemplateRegistry.ALPINE, item.getDefaultTemplateId(),
+                "ScevRegistry.NVME_PRELOADED must be constructed with DiskTemplateRegistry.ALPINE — "
+                        + "the preloaded NVMe is the Alpine live-install image. BUILDROOT still exists "
+                        + "as a creative-tab variant via the DISK_TEMPLATE component, not as the ctor "
+                        + "default. Changing the default? Update ScevRegistry AND this test together.");
     }
 
     @Test
@@ -90,9 +92,9 @@ class PreloadedNvmeItemTest {
         DiskTemplateRegistry.registerBuiltins();
 
         PreloadedNvmeItem item = ScevRegistry.NVME_PRELOADED.get();
-        assertEquals(BuildrootDiskTemplate.ASSET_NAME, item.getOrigin(),
+        assertEquals(lekkit.scev.machine.storage.AlpineDiskTemplate.ASSET_NAME, item.getOrigin(),
                 "getOrigin must come from the resolved template's assetName when the template is registered");
-        assertEquals(BuildrootDiskTemplate.SIZE_MB, item.getSizeMb(),
+        assertEquals(lekkit.scev.machine.storage.AlpineDiskTemplate.SIZE_MB, item.getSizeMb(),
                 "getSizeMb must come from the resolved template's sizeMb when the template is registered");
     }
 
@@ -114,6 +116,6 @@ class PreloadedNvmeItemTest {
                 "Same fallback shape for getSizeMb — matches blank NvmeItem's 2048 MiB default.");
         // defaultTemplateId is still reported — it's hardcoded on the item,
         // independent of whether the registry currently has it.
-        assertEquals(DiskTemplateRegistry.BUILDROOT, item.getDefaultTemplateId());
+        assertEquals(DiskTemplateRegistry.ALPINE, item.getDefaultTemplateId());
     }
 }

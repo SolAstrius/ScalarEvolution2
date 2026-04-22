@@ -1309,18 +1309,19 @@ KernelStub.LOAD_ADDR + LINUX_MAGIC_OFFSET, expectedMagic.length);
     /**
      * End-to-end: installing a {@link lekkit.scev.items.PreloadedNvmeItem}
      * causes the per-UUID disk image on disk to be seeded from the
-     * {@link lekkit.scev.machine.storage.BuildrootDiskTemplate} —
-     * a real ext2 filesystem with a deterministic UUID and volume label.
+     * {@link lekkit.scev.machine.storage.AlpineDiskTemplate} —
+     * a real ext4 filesystem (ext2-superblock-compatible) with a
+     * deterministic UUID and volume label.
      *
      * <p>This is the "disk with an OS on it" proof-of-life. Power path:
      *
      * <ol>
      *   <li>Flash chip installed -> LINUX firmware loads OpenSBI + Linux.</li>
      *   <li>PreloadedNvmeItem installed -> parser emits
-     *       {@code DiskSpec(templateId=scev:buildroot)}.</li>
+     *       {@code DiskSpec(templateId=scev:alpine)}.</li>
      *   <li>{@code RvvmMachineBackend} resolves the template, asks
      *       {@code StorageManager} to seed the per-UUID image from the
-     *       template's asset ({@code linux_rootfs.ext2}).</li>
+     *       template's asset ({@code alpine_rootfs.img}).</li>
      *   <li>Attaches the image as a VirtIO NVMe block device in the guest.</li>
      * </ol>
      *
@@ -1328,29 +1329,29 @@ KernelStub.LOAD_ADDR + LINUX_MAGIC_OFFSET, expectedMagic.length);
      * per-UUID image file and asserting:
      *
      * <ul>
-     *   <li>The ext2 superblock magic {@code 0xEF53} lives at offset 1080.</li>
-     *   <li>The filesystem volume label at offset 1144 is
-     *       {@code "SCEV_ROOTFS"}.</li>
-     *   <li>The filesystem UUID at offset 1128 matches the deterministic
-     *       build-time UUID {@code deadbeef-cafe-babe-feed-facefacefeed}.</li>
+     *   <li>The ext2/ext4 superblock magic {@code 0xEF53} lives at offset 1080.</li>
+     *   <li>The filesystem volume label at offset 1144 matches
+     *       {@link lekkit.scev.machine.storage.AlpineDiskTemplate#FILESYSTEM_LABEL}.</li>
+     *   <li>The filesystem UUID at offset 1128 matches
+     *       {@link lekkit.scev.machine.storage.AlpineDiskTemplate#FILESYSTEM_UUID}.</li>
      * </ul>
      *
      * <p>If any of these fail, either the template pipeline didn't copy
      * the bytes (regressed `StorageManager.initImage` / `copyImage` /
      * registry lookup) or the asset itself was clobbered. Both are
-     * user-visible — guest-side `mount -t ext2 /dev/nvme0n1` would fail.
+     * user-visible — guest-side `mount -t ext4 /dev/nvme0n1` would fail.
      *
      * <p>Also asserts the parser emitted {@code spec.nvmeDrives().get(0)
-     * .templateId() == BUILDROOT} so the "blank vs. preloaded" distinction
+     * .templateId() == ALPINE} so the "blank vs. preloaded" distinction
      * is visible in the spec.
      */
     @GameTest(templateNamespace = ScalarEvolution.MODID, template = "empty", timeoutTicks = 200)
-    public static void preloaded_nvme_seeds_image_from_buildroot_template(GameTestHelper helper) {
-        // Sanity: the BUILDROOT template must be registered. Otherwise the
+    public static void preloaded_nvme_seeds_image_from_alpine_template(GameTestHelper helper) {
+        // Sanity: the ALPINE template must be registered. Otherwise the
         // backend falls back to blank and this whole test is meaningless.
         if (!lekkit.scev.machine.storage.DiskTemplateRegistry.contains(
-                lekkit.scev.machine.storage.DiskTemplateRegistry.BUILDROOT)) {
-            helper.fail("BUILDROOT disk template not registered — did common setup call "
+                lekkit.scev.machine.storage.DiskTemplateRegistry.ALPINE)) {
+            helper.fail("ALPINE disk template not registered — did common setup call "
                     + "DiskTemplateRegistry.registerBuiltins()?");
             return;
         }
@@ -1381,7 +1382,7 @@ KernelStub.LOAD_ADDR + LINUX_MAGIC_OFFSET, expectedMagic.length);
 
             // --- Parser-side assertion ---
             // The PreloadedNvmeItem must have produced a DiskSpec with
-            // templateId set to BUILDROOT.
+            // templateId set to ALPINE.
             java.util.List<MachineSpec.DiskSpec> nvmes = state.getBackend().spec().nvmeDrives();
             if (nvmes.isEmpty()) {
                 helper.fail("Expected 1 NVMe in the spec (the preloaded one), got 0. "
@@ -1390,8 +1391,8 @@ KernelStub.LOAD_ADDR + LINUX_MAGIC_OFFSET, expectedMagic.length);
                 return;
             }
             MachineSpec.DiskSpec d = nvmes.get(0);
-            if (!d.hasTemplateRef() || !lekkit.scev.machine.storage.DiskTemplateRegistry.BUILDROOT.equals(d.templateId())) {
-                helper.fail("Preloaded NVMe didn't produce a templateId=scev:buildroot DiskSpec. "
+            if (!d.hasTemplateRef() || !lekkit.scev.machine.storage.DiskTemplateRegistry.ALPINE.equals(d.templateId())) {
+                helper.fail("Preloaded NVMe didn't produce a templateId=scev:alpine DiskSpec. "
                         + "Got templateId=" + d.templateId() + ", origin=" + d.origin()
                         + ". The parser's NVMe branch must check for PreloadedNvmeItem and "
                         + "attach getDefaultTemplateId() to the DiskSpec.");
@@ -1401,9 +1402,8 @@ KernelStub.LOAD_ADDR + LINUX_MAGIC_OFFSET, expectedMagic.length);
             // --- Backend-side assertion (the real E2E proof) ---
             // StorageManager should have created a per-UUID image file
             // seeded with the template's bytes. Read it from disk and
-            // verify ext2 magic, label, and UUID — same asserts as
-            // BuildrootDiskTemplateTest but against the per-UUID copy,
-            // not the classpath.
+            // verify ext2/ext4 superblock magic, label, and UUID against
+            // the per-UUID copy (not the classpath template).
             java.nio.file.Path imagePath = java.nio.file.Paths.get(
                     lekkit.scev.server.StorageManager.imagePath(d.uuid()));
             if (!java.nio.file.Files.isRegularFile(imagePath)) {
@@ -1414,12 +1414,17 @@ KernelStub.LOAD_ADDR + LINUX_MAGIC_OFFSET, expectedMagic.length);
                 return;
             }
 
-            byte[] head = new byte[1160];
+            // The Alpine template is a whole-disk image: MBR sector at
+            // offset 0, then partition 1 at some LBA that the MBR itself
+            // tells us. The ext4 superblock lives at (partition_start +
+            // 1024), not at a hardcoded file offset — so parse the MBR
+            // entry first.
+            byte[] mbr = new byte[512];
             try (java.io.InputStream in = java.nio.file.Files.newInputStream(imagePath)) {
-                int n = in.read(head);
-                if (n < 1160) {
-                    helper.fail("Per-UUID image is suspiciously short (" + n + " bytes read < 1160). "
-                            + "Template copy must have been truncated. Check StorageManager.copyImage.");
+                int n = in.read(mbr);
+                if (n < 512) {
+                    helper.fail("Per-UUID image is shorter than an MBR sector (" + n + " bytes). "
+                            + "Template copy must have been truncated — check StorageManager.copyImage.");
                     return;
                 }
             } catch (java.io.IOException e) {
@@ -1427,37 +1432,84 @@ KernelStub.LOAD_ADDR + LINUX_MAGIC_OFFSET, expectedMagic.length);
                 return;
             }
 
-            // ext2 superblock magic (0xEF53 LE) at offset 1080.
-            int magicLo = head[1080] & 0xFF;
-            int magicHi = head[1081] & 0xFF;
-            int magic = magicLo | (magicHi << 8);
-            if (magic != 0xEF53) {
-                helper.fail("ext2 magic missing at offset 1080 of per-UUID image (got 0x"
-                        + Integer.toHexString(magic) + "). The Buildroot template bytes "
+            // MBR magic 0x55AA at offset 510.
+            if ((mbr[510] & 0xFF) != 0x55 || (mbr[511] & 0xFF) != 0xAA) {
+                helper.fail("MBR signature missing at offset 510 of per-UUID image (got 0x"
+                        + Integer.toHexString(mbr[510] & 0xFF) + " "
+                        + Integer.toHexString(mbr[511] & 0xFF) + "). The Alpine template bytes "
                         + "weren't copied into the image — either StorageManager.copyImage "
-                        + "regressed or the bundled linux_rootfs.ext2 is corrupt.");
+                        + "regressed or the bundled alpine_rootfs.img is corrupt.");
                 return;
             }
 
-            // Volume label "SCEV_ROOTFS" at offset 1144 (16 bytes, NUL-padded).
+            // Partition 1 entry at MBR offset 0x1BE (16 bytes), LBA-start
+            // as little-endian u32 at relative offset 8.
+            long lbaStart = ((long)(mbr[0x1BE + 8]  & 0xFF))
+                          | ((long)(mbr[0x1BE + 9]  & 0xFF) << 8)
+                          | ((long)(mbr[0x1BE + 10] & 0xFF) << 16)
+                          | ((long)(mbr[0x1BE + 11] & 0xFF) << 24);
+            if (lbaStart == 0) {
+                StringBuilder entryHex = new StringBuilder();
+                for (int i = 0; i < 16; i++) entryHex.append(String.format("%02x ", mbr[0x1BE + i]));
+                helper.fail("MBR partition 1 has zero LBA start — expected a bootable Alpine "
+                        + "partition. Got entry bytes: " + entryHex.toString().trim());
+                return;
+            }
+            long partitionOffset = lbaStart * 512L;
+            // ext4 superblock at +1024 into the partition; we need the
+            // superblock's first ~136 bytes (up to s_volume_name end at
+            // sb+0x88) so grab a round 512 from partition+1024.
+            byte[] sb = new byte[512];
+            try (java.io.InputStream in = java.nio.file.Files.newInputStream(imagePath)) {
+                long skipTarget = partitionOffset + 1024;
+                long skipped = in.skip(skipTarget);
+                if (skipped < skipTarget) {
+                    helper.fail("Could not skip to superblock at offset " + skipTarget
+                            + " of per-UUID image (only skipped " + skipped + " bytes). "
+                            + "Image is shorter than the MBR claims the partition is.");
+                    return;
+                }
+                int n = in.read(sb);
+                if (n < 136) {
+                    helper.fail("Superblock read too short (" + n + " bytes). Image is truncated.");
+                    return;
+                }
+            } catch (java.io.IOException e) {
+                helper.fail("Could not read superblock at offset " + (partitionOffset + 1024) + ": " + e);
+                return;
+            }
+
+            // ext2/ext4 superblock magic (0xEF53 LE) at sb+0x38.
+            int magic = (sb[0x38] & 0xFF) | ((sb[0x39] & 0xFF) << 8);
+            if (magic != 0xEF53) {
+                helper.fail("ext4 magic missing at partition+1024+0x38 (file offset 0x"
+                        + Long.toHexString(partitionOffset + 1024 + 0x38)
+                        + ", got 0x" + Integer.toHexString(magic)
+                        + "). The Alpine template bytes weren't copied into the image — "
+                        + "either StorageManager.copyImage regressed or the bundled "
+                        + "alpine_rootfs.img is corrupt.");
+                return;
+            }
+
+            // Volume label at sb+0x78 (s_volume_name, 16 bytes, NUL-padded).
             byte[] label = new byte[16];
-            System.arraycopy(head, 1144, label, 0, 16);
+            System.arraycopy(sb, 0x78, label, 0, 16);
             int labelLen = 0;
             while (labelLen < 16 && label[labelLen] != 0) labelLen++;
             String labelStr = new String(label, 0, labelLen);
-            if (!lekkit.scev.machine.storage.BuildrootDiskTemplate.FILESYSTEM_LABEL.equals(labelStr)) {
-                helper.fail("Volume label mismatch at offset 1144: expected '"
-                        + lekkit.scev.machine.storage.BuildrootDiskTemplate.FILESYSTEM_LABEL
+            if (!lekkit.scev.machine.storage.AlpineDiskTemplate.FILESYSTEM_LABEL.equals(labelStr)) {
+                helper.fail("Volume label mismatch at sb+0x78: expected '"
+                        + lekkit.scev.machine.storage.AlpineDiskTemplate.FILESYSTEM_LABEL
                         + "', got '" + labelStr + "'. Either a different asset was copied "
                         + "in, or something is writing to the image post-seed.");
                 return;
             }
 
-            // Filesystem UUID at offset 1128 (16 bytes).
+            // Filesystem UUID at sb+0x68 (s_uuid, 16 bytes).
             byte[] fsUuid = new byte[16];
-            System.arraycopy(head, 1128, fsUuid, 0, 16);
+            System.arraycopy(sb, 0x68, fsUuid, 0, 16);
             java.util.UUID expected = java.util.UUID.fromString(
-                    lekkit.scev.machine.storage.BuildrootDiskTemplate.FILESYSTEM_UUID);
+                    lekkit.scev.machine.storage.AlpineDiskTemplate.FILESYSTEM_UUID);
             long msb = expected.getMostSignificantBits();
             long lsb = expected.getLeastSignificantBits();
             byte[] expectedUuid = new byte[16];
@@ -1465,10 +1517,10 @@ KernelStub.LOAD_ADDR + LINUX_MAGIC_OFFSET, expectedMagic.length);
             for (int i = 0; i < 8; i++) expectedUuid[8 + i] = (byte) (lsb >> (56 - 8 * i));
             for (int i = 0; i < 16; i++) {
                 if (fsUuid[i] != expectedUuid[i]) {
-                    helper.fail("Filesystem UUID byte " + i + " mismatch at offset 1128. "
-                            + "The seeded image isn't the expected BuildrootDiskTemplate asset. "
-                            + "Rebuild linux_rootfs.ext2 via the genext2fs + tune2fs recipe in "
-                            + "docs/FIRMWARE_REGISTRY.md.");
+                    helper.fail("Filesystem UUID byte " + i + " mismatch at sb+0x68. "
+                            + "The seeded image isn't the expected AlpineDiskTemplate asset. "
+                            + "Rebuild alpine_rootfs.img via the scev-alpine pipeline "
+                            + "(github.com/SolAstrius/scev-alpine).");
                     return;
                 }
             }

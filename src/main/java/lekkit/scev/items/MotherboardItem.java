@@ -7,7 +7,6 @@ package lekkit.scev.items;
 
 import java.util.List;
 import lekkit.scev.menu.MotherboardMenu;
-import net.minecraft.ChatFormatting;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.InteractionHand;
@@ -100,15 +99,10 @@ public class MotherboardItem extends Item {
 
     @Override
     public void appendHoverText(ItemStack stack, TooltipContext ctx, List<Component> tooltip, TooltipFlag flag) {
-        tooltip.add(Component.translatable("text.scev.ram_slots")
-                .append(Component.literal(": "))
-                .append(Component.literal(String.valueOf(ramSlots())).withStyle(ChatFormatting.YELLOW)));
-        tooltip.add(Component.translatable("text.scev.pci_slots")
-                .append(Component.literal(": "))
-                .append(Component.literal(String.valueOf(pciSlots())).withStyle(ChatFormatting.YELLOW)));
-        tooltip.add(Component.translatable("text.scev.m2_slots")
-                .append(Component.literal(": "))
-                .append(Component.literal(String.valueOf(m2Slots())).withStyle(ChatFormatting.YELLOW)));
+        ScevTooltips.kv(tooltip, "text.scev.tier", Integer.toString(level));
+        ScevTooltips.kv(tooltip, "text.scev.ram_slots", String.valueOf(ramSlots()));
+        ScevTooltips.kv(tooltip, "text.scev.pci_slots", String.valueOf(pciSlots()));
+        ScevTooltips.kv(tooltip, "text.scev.m2_slots", String.valueOf(m2Slots()));
         super.appendHoverText(stack, ctx, tooltip, flag);
     }
 }

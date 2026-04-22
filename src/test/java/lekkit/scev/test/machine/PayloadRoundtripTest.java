@@ -54,38 +54,42 @@ class PayloadRoundtripTest {
     }
 
     @Test
-    @DisplayName("DisplayPayload preserves uuid, size, and pixel bytes")
+    @DisplayName("DisplayPayload preserves uuid, PTS, size, and pixel bytes")
     void displayPayloadRoundtrip() {
         UUID uuid = UUID.randomUUID();
+        long pts = 123_456_789L;
         short w = 640;
         short h = 480;
         byte[] pixels = new byte[w * h * 4];
         // Fill with a pattern so we can verify byte-exact copy.
         for (int i = 0; i < pixels.length; i++) pixels[i] = (byte) (i & 0xFF);
-        DisplayPayload p = new DisplayPayload(uuid, w, h, pixels);
+        DisplayPayload p = DisplayPayload.create(uuid, pts, w, h, pixels);
 
         ByteBuf buf = Unpooled.buffer();
         DisplayPayload.STREAM_CODEC.encode(buf, p);
         DisplayPayload out = DisplayPayload.STREAM_CODEC.decode(buf);
 
         assertEquals(uuid, out.machineUuid());
+        assertEquals(pts, out.ptsMicros());
         assertEquals(w, out.width());
         assertEquals(h, out.height());
         assertArrayEquals(pixels, out.pixels());
     }
 
     @Test
-    @DisplayName("SoundFramePayload preserves uuid and PCM bytes byte-for-byte")
+    @DisplayName("SoundFramePayload preserves uuid, PTS, and PCM bytes byte-for-byte")
     void soundFramePayloadRoundtrip() {
         UUID uuid = UUID.randomUUID();
+        long pts = 20_000L;  // one 20 ms frame worth of offset
         // 20 ms of 48 kHz mono = 960 samples * 2 bytes.
         byte[] pcm = new byte[1920];
         for (int i = 0; i < pcm.length; i++) pcm[i] = (byte) ((i * 7) & 0xFF);
-        SoundFramePayload p = new SoundFramePayload(uuid, pcm);
+        SoundFramePayload p = SoundFramePayload.create(uuid, pts, pcm);
         ByteBuf buf = Unpooled.buffer();
         SoundFramePayload.STREAM_CODEC.encode(buf, p);
         SoundFramePayload out = SoundFramePayload.STREAM_CODEC.decode(buf);
         assertEquals(uuid, out.machineUuid());
+        assertEquals(pts, out.ptsMicros());
         assertArrayEquals(pcm, out.pcm());
         assertFalse(buf.isReadable(), "unread trailing bytes: " + buf.readableBytes());
     }
@@ -93,7 +97,7 @@ class PayloadRoundtripTest {
     @Test
     @DisplayName("SoundFramePayload handles zero-length PCM (doesn't crash decode)")
     void soundFramePayloadEmpty() {
-        SoundFramePayload p = new SoundFramePayload(UUID.randomUUID(), new byte[0]);
+        SoundFramePayload p = SoundFramePayload.create(UUID.randomUUID(), 0L, new byte[0]);
         ByteBuf buf = Unpooled.buffer();
         SoundFramePayload.STREAM_CODEC.encode(buf, p);
         SoundFramePayload out = SoundFramePayload.STREAM_CODEC.decode(buf);
@@ -103,7 +107,7 @@ class PayloadRoundtripTest {
     @Test
     @DisplayName("DisplayPayload with a tiny framebuffer")
     void displayPayloadTiny() {
-        DisplayPayload p = new DisplayPayload(UUID.randomUUID(), (short) 4, (short) 4,
+        DisplayPayload p = DisplayPayload.create(UUID.randomUUID(), 0L, (short) 4, (short) 4,
                 new byte[] {
                         1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
                         17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32,

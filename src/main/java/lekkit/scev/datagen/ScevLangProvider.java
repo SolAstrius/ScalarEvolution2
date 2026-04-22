@@ -32,12 +32,21 @@ public class ScevLangProvider extends LanguageProvider {
         add("container.scev.laptop", "Tinkerpad");
         add("container.scev.machine", "Machine");
         add("container.scev.mcu_board", "MCU Board");
+        add("container.scev.flash_programmer", "Flash Programmer");
 
         add("text.scev.capacity", "Capacity");
+        add("text.scev.disk_id",  "Disk ID");
         add("text.scev.tier", "Tier");
         add("text.scev.cores", "Cores");
         add("text.scev.isa", "ISA");
         add("text.scev.embedded_ram", "On-die RAM");
+        add("text.scev.uses_remaining", "Uses remaining");
+        add("text.scev.pci_kind", "PCIe function");
+        add("text.scev.pci_kind.vga",   "VGA framebuffer");
+        add("text.scev.pci_kind.net",   "Network adapter");
+        add("text.scev.pci_kind.gpio",  "GPIO / redstone");
+        add("text.scev.pci_kind.sound", "Sound");
+        add("text.scev.soldering_iron.hint", "Ignites attackers on contact");
         add("text.scev.firmware", "Firmware");
         add("text.scev.firmware.custom", "Custom (%s bytes)");
         add("text.scev.firmware.blank", "Blank");
@@ -70,8 +79,23 @@ public class ScevLangProvider extends LanguageProvider {
         add("jade.scev.pci_cards",        "PCI cards");
         add("jade.scev.firmware",         "Firmware");
         add("jade.scev.gpio",             "GPIO");
-        add("jade.scev.linked_to",        "Linked to");
-        add("jade.scev.not_linked",       "Not linked to any machine");
+        add("jade.scev.linked_to",           "Linked to");
+        add("jade.scev.not_linked",          "Not linked to any machine");
+        add("jade.scev.keyboard.has_mouse",  "Has trackpad");
+        add("jade.scev.programmer.source",   "Source");
+        add("jade.scev.programmer.target",   "Target");
+
+        // Jade plugin config toggle labels. Jade 15.10.5+ asserts that every
+        // registered provider UID has a matching translation — without these
+        // the first click into the Accessibility/Settings screen crashes with
+        // "Missing config translation". Keys follow Jade's required shape:
+        // config.jade.plugin_<modid>.<provider-uid-path>.
+        add("config.jade.plugin_scev.computer_case",    "Computer Case");
+        add("config.jade.plugin_scev.mcu_board",        "MCU Board");
+        add("config.jade.plugin_scev.vt100",            "VT100 Terminal");
+        add("config.jade.plugin_scev.crt_monitor",      "CRT Monitor");
+        add("config.jade.plugin_scev.keyboard",         "Keyboard");
+        add("config.jade.plugin_scev.flash_programmer", "Flash Programmer");
 
         // Power-on preflight failure messages. Shown as the action-bar
         // overlay when the player clicks Power but a required component is
@@ -82,6 +106,21 @@ public class ScevLangProvider extends LanguageProvider {
         add("text.scev.power.fail.no_flash",          "Install a firmware flash chip");
         add("text.scev.power.fail.no_ram",            "Install at least one RAM stick");
         add("text.scev.power.fail.no_soc",            "Install a System-on-Chip");
+
+        // Keyboard peripheral-bus feedback. Shown on the action bar when
+        // the player right-clicks an unbound or stale-binding keyboard.
+        add("text.scev.keyboard.unbound", "No computer connected to this keyboard");
+        add("text.scev.keyboard.stale",   "Computer no longer present");
+
+        // Flash programmer UI.
+        add("button.scev.programmer.write",        "Write");
+        add("tooltip.scev.programmer.write",       "Copy the first ~1 MiB of the source drive into the target flash chip");
+        add("text.scev.programmer.status.idle",              "");
+        add("text.scev.programmer.status.ok",                "Flashed");
+        add("text.scev.programmer.status.no_source",         "Insert a disk in the source slot");
+        add("text.scev.programmer.status.no_target",         "Insert a flash chip in the target slot");
+        add("text.scev.programmer.status.unreadable_source", "Source has no readable image");
+        add("text.scev.programmer.status.too_large",         "Source data exceeds 1 MiB cap");
 
         addItem(ScevRegistry.EPOXY,              "Epoxy Solution");
         addItem(ScevRegistry.SILICA_COMPOUND,    "Silica Compound");
@@ -105,7 +144,9 @@ public class ScevLangProvider extends LanguageProvider {
         addItem(ScevRegistry.FLASH_CHIP,         "Flash ROM Chip");
         addItem(ScevRegistry.HDD,                "IDE Hard Disk Drive");
         addItem(ScevRegistry.NVME,               "NVMe Drive");
-        addItem(ScevRegistry.NVME_PRELOADED,     "NVMe Drive (Buildroot Linux)");
+        // Template display name is appended in parens by
+        // PreloadedNvmeItem.getName(), so keep the lang key bare.
+        addItem(ScevRegistry.NVME_PRELOADED,     "NVMe Drive");
         addItem(ScevRegistry.VGA_CARD,           "Videoadapter Card");
         addItem(ScevRegistry.GPIO_CARD,          "GPIO Redstone Card");
         addItem(ScevRegistry.SOUND_CARD,         "Sound Card");
@@ -130,5 +171,7 @@ public class ScevLangProvider extends LanguageProvider {
         addBlock(ScevRegistry.KEYBOARD,       "Keyboard");
         addBlock(ScevRegistry.KEYBOARD_MOUSE, "Keyboard with mice");
         addBlock(ScevRegistry.MCU_BOARD,      "MCU Board");
+        addBlock(ScevRegistry.CABLE,          "Peripheral Cable");
+        addBlock(ScevRegistry.FLASH_PROGRAMMER, "Flash Programmer");
     }
 }

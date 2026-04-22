@@ -86,16 +86,22 @@ class SoundStreamManagerTest {
 
     /* -------------------- end-to-end via onAudio + pollFrame -------------------- */
 
+    // onAudio enqueues PCM onto an internal cross-thread channel; the frame
+    // slicing happens on the server tick. Tests invoke `tick()` explicitly
+    // to drain the channel — MachineManager.getMachineState returns null in
+    // unit tests, so tick() bails out after slicing and leaves the frames
+    // in pendingFrames for pollFrame() to consume.
+
     @Test
-    @DisplayName("onAudio with exactly one frame's worth of input produces one frame")
+    @DisplayName("onAudio + tick with exactly one frame's worth of input produces one frame")
     void oneFrameIn_oneFrameOut() {
         SoundStreamManager mgr = SoundStreamManager.create(uuid);
-        // No downsample — input and output sizes are the same.
         byte[] input = new byte[SoundStreamManager.FRAME_BYTES];
         for (int i = 0; i < input.length / 2; i++) {
             putLE16(input, i * 2, i & 0x7FFF);
         }
         mgr.onAudio(input);
+        mgr.tick();
         assertEquals(1, mgr.pendingFrameCount(),
                 "one frame's worth of input should yield exactly one frame");
         byte[] frame = mgr.pollFrame();
@@ -112,9 +118,11 @@ class SoundStreamManagerTest {
         for (int i = 0; i < half.length; i++) half[i] = (byte) i;
 
         mgr.onAudio(half);
+        mgr.tick();
         assertEquals(0, mgr.pendingFrameCount(),
                 "half a frame's worth of input should not produce a frame yet");
         mgr.onAudio(half);
+        mgr.tick();
         assertEquals(1, mgr.pendingFrameCount(),
                 "completing the frame via a second call should emit exactly one frame");
     }
@@ -129,6 +137,7 @@ class SoundStreamManagerTest {
         for (int i = 0; i < 9; i++) chunk[i] = (byte) i;
         int chunksNeeded = (SoundStreamManager.FRAME_BYTES / 9) + 2;
         for (int i = 0; i < chunksNeeded; i++) mgr.onAudio(chunk);
+        mgr.tick();
         assertTrue(mgr.pendingFrameCount() >= 1,
                 "chunks of arbitrary size should accumulate until frame size is reached");
     }
@@ -141,6 +150,7 @@ class SoundStreamManagerTest {
         int framesToGenerate = SoundStreamManager.MAX_QUEUED_FRAMES + 10;
         byte[] bulk = new byte[SoundStreamManager.FRAME_BYTES * framesToGenerate];
         mgr.onAudio(bulk);
+        mgr.tick();
         assertEquals(SoundStreamManager.MAX_QUEUED_FRAMES, mgr.pendingFrameCount(),
                 "queue must be capped at MAX_QUEUED_FRAMES regardless of input size");
         assertEquals(10, mgr.droppedFrames(),
@@ -153,6 +163,7 @@ class SoundStreamManagerTest {
         SoundStreamManager mgr = SoundStreamManager.create(uuid);
         mgr.onAudio(null);
         mgr.onAudio(new byte[0]);
+        mgr.tick();
         assertEquals(0, mgr.pendingFrameCount());
         assertEquals(0, mgr.totalPcmBytesIn());
     }

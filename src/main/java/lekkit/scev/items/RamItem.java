@@ -6,7 +6,6 @@
 package lekkit.scev.items;
 
 import java.util.List;
-import net.minecraft.ChatFormatting;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
@@ -32,9 +31,7 @@ public class RamItem extends Item {
 
     @Override
     public void appendHoverText(ItemStack stack, TooltipContext ctx, List<Component> tooltip, TooltipFlag flag) {
-        tooltip.add(Component.translatable("text.scev.capacity")
-                .append(Component.literal(": "))
-                .append(Component.literal(getMegabytes() + " MiB").withStyle(ChatFormatting.YELLOW)));
+        ScevTooltips.kv(tooltip, "text.scev.capacity", getMegabytes() + " MiB");
         super.appendHoverText(stack, ctx, tooltip, flag);
     }
 }

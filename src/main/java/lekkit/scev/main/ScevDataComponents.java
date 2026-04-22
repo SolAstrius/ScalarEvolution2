@@ -95,6 +95,20 @@ public final class ScevDataComponents {
                     .persistent(FirmwareBlob.CODEC)
                     .networkSynchronized(FirmwareBlob.STREAM_CODEC));
 
+    /**
+     * Overrides the {@link lekkit.scev.items.PreloadedNvmeItem}'s
+     * constructor-provided default template id, letting one registered
+     * item surface multiple disk templates via per-stack variants (the
+     * creative tab emits one stack per registered template).
+     *
+     * <p>Parallels {@link #FIRMWARE_KIND} for flash chips: one item,
+     * N variants discriminated by this component.
+     */
+    public static final DeferredHolder<DataComponentType<?>, DataComponentType<ResourceLocation>> DISK_TEMPLATE =
+            DATA_COMPONENTS.registerComponentType("disk_template", b -> b
+                    .persistent(ResourceLocation.CODEC)
+                    .networkSynchronized(ResourceLocation.STREAM_CODEC));
+
     public static void register(IEventBus modBus) {
         DATA_COMPONENTS.register(modBus);
     }

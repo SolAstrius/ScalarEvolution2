@@ -17,7 +17,10 @@ import net.neoforged.neoforge.network.handling.IPayloadContext;
 import net.neoforged.neoforge.network.registration.PayloadRegistrar;
 
 /**
- * Registers the three custom packet payloads used by Scalar Evolution.
+ * Registers every custom packet payload and wires each to its server- or
+ * client-side handler. Payload classes live under {@code lekkit.scev.network};
+ * add a new {@code r.playToServer} / {@code r.playToClient} entry below
+ * when introducing one.
  */
 public final class ScevNetwork {
     private ScevNetwork() {}
@@ -33,6 +36,10 @@ public final class ScevNetwork {
                 ScevNetwork::handleInputOnServer);
         r.playToServer(MachineResetPayload.TYPE, MachineResetPayload.STREAM_CODEC,
                 ScevNetwork::handleResetOnServer);
+        r.playToServer(FlashProgrammerWritePayload.TYPE, FlashProgrammerWritePayload.STREAM_CODEC,
+                ScevNetwork::handleProgrammerWriteOnServer);
+        r.playToServer(KeyframeRequestPayload.TYPE, KeyframeRequestPayload.STREAM_CODEC,
+                ScevNetwork::handleKeyframeRequestOnServer);
         r.playToClient(DisplayPayload.TYPE, DisplayPayload.STREAM_CODEC,
                 ScevNetwork::handleDisplayOnClient);
         r.playToClient(SoundFramePayload.TYPE, SoundFramePayload.STREAM_CODEC,
@@ -77,6 +84,24 @@ public final class ScevNetwork {
         }
         if (handle == null) return;
         if (payload.reset()) handle.reset(); else handle.power();
+    }
+
+    private static void handleProgrammerWriteOnServer(FlashProgrammerWritePayload payload, IPayloadContext ctx) {
+        if (!(ctx.player() instanceof ServerPlayer sp)) return;
+        AbstractContainerMenu menu = sp.containerMenu;
+        if (!(menu instanceof lekkit.scev.menu.FlashProgrammerMenu fp)) return;
+        // Disk read hops to Util.ioPool(); the apply stage comes back on
+        // the server thread, so reportStatus (which mutates a DataSlot)
+        // is called safely.
+        lekkit.scev.server.FlashProgrammerService.writeAsync(fp.getProgrammer())
+                .thenAccept(fp::reportStatus);
+    }
+
+    private static void handleKeyframeRequestOnServer(KeyframeRequestPayload payload, IPayloadContext ctx) {
+        // No auth check — see KeyframeRequestPayload class javadoc. The
+        // handler just flags a UUID; the BE's next broadcastFramebuffer
+        // consumes the flag and forces an IDR before encoding.
+        lekkit.scev.server.VideoKeyframeRequests.request(payload.machineUuid());
     }
 
     private static void handleDisplayOnClient(DisplayPayload payload, IPayloadContext ctx) {

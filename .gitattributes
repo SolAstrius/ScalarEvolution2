@@ -1,0 +1,5 @@
+# Preserve vendored third-party sources byte-for-byte. Without this,
+# git's default text/CRLF auto-detection would rewrite line endings in
+# files like OpenH264's Windows .rc resources, making it harder to
+# reason about local modifications vs upstream drift.
+vendor/** -text

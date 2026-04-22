@@ -35,6 +35,10 @@ public final class ScevClient {
         // Register the per-tick pause watcher. Using the game bus (not the
         // mod bus) because ClientTickEvent fires on the game bus.
         NeoForge.EVENT_BUS.addListener(ScevClient::onClientTick);
+        // DisplayManager runs the A/V-sync video jitter buffer: every
+        // tick it picks the newest buffered frame whose PTS is <= the
+        // media clock and presents it.
+        NeoForge.EVENT_BUS.addListener(DisplayManager::onClientTick);
     }
 
     public static void onRegisterReloadListeners(RegisterClientReloadListenersEvent e) {

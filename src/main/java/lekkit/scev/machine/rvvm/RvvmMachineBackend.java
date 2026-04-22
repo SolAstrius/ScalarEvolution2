@@ -17,7 +17,7 @@ import lekkit.rvvm.GoldfishRTC;
 import lekkit.rvvm.HIDKeyboard;
 import lekkit.rvvm.HIDMouse;
 import lekkit.rvvm.I2CBus;
-import lekkit.rvvm.NS16550A;
+import lekkit.rvvm.NS16550ABridge;
 import lekkit.rvvm.NVMeDrive;
 import lekkit.rvvm.PCIBus;
 import lekkit.rvvm.PLIC;
@@ -35,10 +35,12 @@ import lekkit.scev.machine.KeyboardDevice;
 import lekkit.scev.machine.MachineBackend;
 import lekkit.scev.machine.MachineSpec;
 import lekkit.scev.machine.MouseDevice;
+import lekkit.scev.machine.SerialDevice;
 import lekkit.scev.machine.firmware.FirmwareRegistry;
 import lekkit.scev.machine.firmware.ScevFirmware;
 import lekkit.scev.machine.storage.DiskTemplateRegistry;
 import lekkit.scev.machine.storage.ScevDiskTemplate;
+import lekkit.scev.rpc.ScevRpcManager;
 import lekkit.scev.server.FirmwareAssets;
 import lekkit.scev.server.NativeLoader;
 import lekkit.scev.server.SoundStreamManager;
@@ -86,6 +88,9 @@ public final class RvvmMachineBackend implements MachineBackend {
     private @Nullable RvvmGpio gpio;
     private @Nullable SoundHDA sound;
     private @Nullable SoundStreamManager soundStream;
+    private @Nullable NS16550ABridge kernelUart;
+    private @Nullable NS16550ABridge rpcUart;
+    private @Nullable RvvmSerial rpcSerial;
     private final List<NVMeDrive> nvmeDrives = new ArrayList<>();
 
     /**
@@ -122,7 +127,42 @@ public final class RvvmMachineBackend implements MachineBackend {
         new I2CBus(m);
         new GoldfishRTC(m);
         new Syscon(m);
-        new NS16550A(m);
+
+        // Two NS16550A UARTs, both backed by JVM-visible ring buffers
+        // (not stdio — a dedicated Minecraft server has no meaningful
+        // console for the guest, and multiple machines would collide on
+        // it). The first one is attached at NS16550A_ADDR_DEFAULT and
+        // becomes ttyS0 / kernel console (rvvm's ns16550a_init_auto
+        // appends `console=ttyS` + an FDT stdout-path property iff it
+        // lands at that address). The second becomes ttyS1 and carries
+        // COBS-framed MessagePack RPC traffic — see ScevRpcManager.
+        //
+        // Kernel-console bytes are drained by ScevRpcManager at DEBUG
+        // log level so they don't bit-rot (a full TX ring would back up
+        // the guest printk path).
+        kernelUart = new NS16550ABridge(m);
+        RvvmSerial kernelConsoleSerial = null;
+        if (kernelUart.isValid()) {
+            kernelConsoleSerial = new RvvmSerial(kernelUart);
+        } else {
+            LOG.warn("[scev-rpc] Kernel-console UART bridge failed to attach for {} — "
+                    + "guest console output will be lost (no-op drain).", spec.uuid());
+        }
+        rpcUart = new NS16550ABridge(m);
+        if (rpcUart.isValid()) {
+            rpcSerial = new RvvmSerial(rpcUart);
+            // Register the per-machine RPC pipeline; handlers/dispatcher
+            // live in the manager. Guest daemon opens /dev/ttyS1 and
+            // starts speaking COBS-framed MessagePack.
+            ScevRpcManager mgr = ScevRpcManager.create(spec.uuid(), rpcSerial);
+            if (kernelConsoleSerial != null) {
+                mgr.attachKernelConsole(kernelConsoleSerial);
+            }
+        } else {
+            LOG.warn("[scev-rpc] RPC UART bridge failed to attach for {} — "
+                    + "guest RPC will be unavailable on this machine.", spec.uuid());
+            rpcUart = null;
+        }
 
         HIDKeyboard hidKb = new HIDKeyboard(m);
         keyboard = new RvvmKeyboard(hidKb);
@@ -523,6 +563,7 @@ public final class RvvmMachineBackend implements MachineBackend {
     @Override public @Nullable KeyboardDevice keyboard()    { return closed ? null : keyboard; }
     @Override public @Nullable MouseDevice mouse()          { return closed ? null : mouse; }
     @Override public @Nullable GpioDevice gpio()            { return closed ? null : gpio; }
+    @Override public @Nullable SerialDevice serial()        { return closed ? null : rpcSerial; }
 
     @Override
     public synchronized @Nullable java.nio.ByteBuffer readMemory(long addr, long size) {
@@ -545,9 +586,18 @@ public final class RvvmMachineBackend implements MachineBackend {
         nic = null;
         gpio = null;
         sound = null;
+        // UART bridges are freed by the machine free() above (via chardev
+        // remove vtable) — just drop our references so poll/feed become
+        // no-ops.
+        kernelUart = null;
+        rpcUart = null;
+        rpcSerial = null;
         if (soundStream != null && spec != null) {
             SoundStreamManager.unregister(spec.uuid());
             soundStream = null;
+        }
+        if (spec != null) {
+            ScevRpcManager.unregister(spec.uuid());
         }
         nvmeDrives.clear();
         // Clean up any custom-firmware temp files we spilled. Not critical
@@ -604,5 +654,12 @@ public final class RvvmMachineBackend implements MachineBackend {
         RvvmGpio(SiFiveGPIO inner) { this.inner = inner; }
         @Override public int readPins() { return inner.read_pins() & 0x3F; }
         @Override public void writePins(int pins) { inner.write_pins(pins & 0x3F); }
+    }
+
+    private static final class RvvmSerial implements SerialDevice {
+        private final NS16550ABridge inner;
+        RvvmSerial(NS16550ABridge inner) { this.inner = inner; }
+        @Override public int pollTx(byte[] buf) { return inner.poll(buf); }
+        @Override public int feedRx(byte[] buf) { return inner.feed(buf); }
     }
 }

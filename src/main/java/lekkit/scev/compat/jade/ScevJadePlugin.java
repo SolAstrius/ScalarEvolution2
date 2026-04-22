@@ -5,7 +5,10 @@
  */
 package lekkit.scev.compat.jade;
 
+import lekkit.scev.blockentity.CRTBlockEntity;
 import lekkit.scev.blockentity.ComputerCaseBlockEntity;
+import lekkit.scev.blockentity.FlashProgrammerBlockEntity;
+import lekkit.scev.blockentity.KeyboardBlockEntity;
 import lekkit.scev.blockentity.McuBoardBlockEntity;
 import lekkit.scev.blockentity.VT100BlockEntity;
 import snownee.jade.api.IWailaClientRegistration;
@@ -39,9 +42,12 @@ public class ScevJadePlugin implements IWailaPlugin {
         // we care about — Jade dispatches by the registered class, walking
         // up the hierarchy so a provider registered on a superclass fires
         // for every subclass BE.
-        r.registerBlockDataProvider(ComputerCaseProvider.INSTANCE, ComputerCaseBlockEntity.class);
-        r.registerBlockDataProvider(McuBoardProvider.INSTANCE, McuBoardBlockEntity.class);
-        r.registerBlockDataProvider(Vt100Provider.INSTANCE, VT100BlockEntity.class);
+        r.registerBlockDataProvider(ComputerCaseProvider.INSTANCE,    ComputerCaseBlockEntity.class);
+        r.registerBlockDataProvider(McuBoardProvider.INSTANCE,        McuBoardBlockEntity.class);
+        r.registerBlockDataProvider(Vt100Provider.INSTANCE,           VT100BlockEntity.class);
+        r.registerBlockDataProvider(CrtMonitorProvider.INSTANCE,      CRTBlockEntity.class);
+        r.registerBlockDataProvider(KeyboardProvider.INSTANCE,        KeyboardBlockEntity.class);
+        r.registerBlockDataProvider(FlashProgrammerProvider.INSTANCE, FlashProgrammerBlockEntity.class);
     }
 
     @Override
@@ -51,8 +57,11 @@ public class ScevJadePlugin implements IWailaPlugin {
         // We use a catch-all on our common DirectionalBlock superclass and
         // discriminate by BE type inside each provider — simpler than
         // enumerating every block (Workstation, McuBoard, VT100, CRT, ...).
-        r.registerBlockComponent(ComputerCaseProvider.INSTANCE, lekkit.scev.blocks.DirectionalBlock.class);
-        r.registerBlockComponent(McuBoardProvider.INSTANCE, lekkit.scev.blocks.McuBoardBlock.class);
-        r.registerBlockComponent(Vt100Provider.INSTANCE, lekkit.scev.blocks.DirectionalBlock.class);
+        r.registerBlockComponent(ComputerCaseProvider.INSTANCE,    lekkit.scev.blocks.DirectionalBlock.class);
+        r.registerBlockComponent(McuBoardProvider.INSTANCE,        lekkit.scev.blocks.McuBoardBlock.class);
+        r.registerBlockComponent(Vt100Provider.INSTANCE,           lekkit.scev.blocks.DirectionalBlock.class);
+        r.registerBlockComponent(CrtMonitorProvider.INSTANCE,      lekkit.scev.blocks.DirectionalBlock.class);
+        r.registerBlockComponent(KeyboardProvider.INSTANCE,        lekkit.scev.blocks.KeyboardBlock.class);
+        r.registerBlockComponent(FlashProgrammerProvider.INSTANCE, lekkit.scev.blocks.FlashProgrammerBlock.class);
     }
 }

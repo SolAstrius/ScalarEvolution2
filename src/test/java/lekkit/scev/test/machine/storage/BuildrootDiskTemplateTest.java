@@ -17,127 +17,74 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 /**
- * Pins down the shipped {@link BuildrootDiskTemplate} — the 16 MiB ext2
- * Linux rootfs that ships with {@code PreloadedNvmeItem}. Asserts the
- * metadata the template declares AND checks that the classpath asset it
- * names actually exists, is the right size, and is a genuine ext2
- * filesystem (superblock magic + volume label).
+ * ext2 filesystem-format invariants for the shipped Buildroot rootfs. The
+ * superblock magic / label / UUID checks would catch a corrupted asset or
+ * a wrong-format file in the jar — both are user-visible regressions that
+ * the generic {@code DiskTemplateInvariantTest} can't detect.
  *
- * <p>If this test fails, either the template constants drifted from the
- * asset or the asset was accidentally dropped / replaced with a different
- * filesystem. Both are user-visible regressions — the preloaded NVMe
- * would start containing the wrong bytes.
+ * Generic shape (assetName non-empty, sizeMb > 0, displayName non-empty,
+ * asset bundled on classpath) lives in the invariant test.
  */
 class BuildrootDiskTemplateTest {
 
     @BeforeAll
     static void bootstrap() { Bootstrap.bootStrap(); }
 
-    @Test
-    @DisplayName("INSTANCE is a reusable singleton")
-    void singleton() {
-        assertSame(BuildrootDiskTemplate.INSTANCE, BuildrootDiskTemplate.INSTANCE);
-    }
-
-    @Test
-    @DisplayName("assetName is linux_rootfs.ext2")
-    void assetName() {
-        assertEquals("linux_rootfs.ext2", BuildrootDiskTemplate.INSTANCE.assetName());
-        assertEquals(BuildrootDiskTemplate.ASSET_NAME,
-                BuildrootDiskTemplate.INSTANCE.assetName());
-    }
-
-    @Test
-    @DisplayName("Declared size is the NvmeItem default (2048 MiB)")
-    void size() {
-        assertEquals(2048, BuildrootDiskTemplate.INSTANCE.sizeMb(),
-                "sizeMb mirrors what a blank NvmeItem declares; bump both together "
-                        + "if the preloaded item should be larger than a blank one.");
-    }
-
-    @Test
-    @DisplayName("displayName is a non-empty component")
-    void displayName() {
-        assertNotNull(BuildrootDiskTemplate.INSTANCE.displayName());
-        assertFalse(BuildrootDiskTemplate.INSTANCE.displayName().getString().isEmpty());
-    }
-
-    @Test
-    @DisplayName("Classpath asset is bundled in the jar")
-    void assetBundled() {
-        // Probe via the same mechanism StorageManager uses at boot.
-        assertTrue(FirmwareAssets.isBundled(BuildrootDiskTemplate.ASSET_NAME),
-                BuildrootDiskTemplate.ASSET_NAME + " is missing from "
-                        + "src/main/resources/assets/scev/firmware/ — the preloaded NVMe "
-                        + "would fall back to blank and stop carrying the Buildroot rootfs. "
-                        + "Rebuild the asset using the Docker recipe documented in "
-                        + "docs/FIRMWARE_REGISTRY.md.");
-    }
-
-    @Test
-    @DisplayName("Asset is a real ext2 filesystem (superblock magic 0xEF53 at offset 1080)")
-    void assetIsRealExt2() throws IOException {
-        // ext2/3/4 layout:
-        //   0      — boot sector (unused by ext2 itself, kept for MBR)
-        //   1024   — superblock
-        //   1024+56= 1080 — s_magic (0xEF53, little-endian u16)
-        //   1024+120=1144 — s_volume_name (16 bytes, NUL-padded)
-        //
-        // If this check fails, either the asset is corrupt or someone
-        // shipped a non-ext2 file by mistake.
-        byte[] head;
+    /**
+     * Reads the first 1160 bytes of the classpath asset — enough to cover
+     * the ext2 boot sector, superblock, and volume-label field.
+     */
+    private static byte[] superblockHead() throws IOException {
         try (InputStream in = BuildrootDiskTemplateTest.class.getResourceAsStream(
                 FirmwareAssets.CLASSPATH_PREFIX + BuildrootDiskTemplate.ASSET_NAME)) {
-            assertNotNull(in, "classpath stream for " + BuildrootDiskTemplate.ASSET_NAME + " is null");
-            head = in.readNBytes(1160);
+            assertNotNull(in, "classpath stream for " + BuildrootDiskTemplate.ASSET_NAME);
+            byte[] head = in.readNBytes(1160);
+            assertEquals(1160, head.length, "asset is shorter than one ext2 superblock");
+            return head;
         }
-        assertEquals(1160, head.length,
-                "Asset is suspiciously short — expected at least 1160 bytes to read superblock");
+    }
 
-        // Magic: little-endian 0xEF53 at offset 1080
-        int magicLo = head[1080] & 0xFF;
-        int magicHi = head[1081] & 0xFF;
-        int magic = magicLo | (magicHi << 8);
+    @Test
+    @DisplayName("Superblock magic 0xEF53 at offset 1080 (asset is actually ext2)")
+    void superblockMagic() throws IOException {
+        // ext2/3/4 layout: 1024-byte boot sector, then superblock at 1024.
+        // s_magic is a little-endian u16 at superblock offset 56 → byte
+        // offset 1080. If this check fails, the shipped file is either
+        // corrupt or not an ext-family filesystem at all.
+        byte[] head = superblockHead();
+        int magic = (head[1080] & 0xFF) | ((head[1081] & 0xFF) << 8);
         assertEquals(0xEF53, magic,
-                "ext2 superblock magic missing at offset 1080 — asset isn't an ext2 filesystem. "
-                        + "Got 0x" + Integer.toHexString(magic) + ". Rebuild the asset via the "
-                        + "genext2fs Docker recipe.");
-
-        // Volume label: "SCEV_ROOTFS\0\0\0\0\0"
-        byte[] label = new byte[16];
-        System.arraycopy(head, 1144, label, 0, 16);
-        int labelLen = 0;
-        while (labelLen < 16 && label[labelLen] != 0) labelLen++;
-        String labelStr = new String(label, 0, labelLen);
-        assertEquals(BuildrootDiskTemplate.FILESYSTEM_LABEL, labelStr,
-                "ext2 volume label at offset 1144 doesn't match BuildrootDiskTemplate.FILESYSTEM_LABEL. "
-                        + "Either the asset was rebuilt without -L SCEV_ROOTFS or the constant drifted.");
+                "ext2 magic missing at offset 1080; got 0x" + Integer.toHexString(magic));
     }
 
     @Test
-    @DisplayName("Asset has the deterministic UUID set at build time")
-    void assetHasDeterministicUuid() throws IOException {
-        // s_uuid is a 16-byte field at offset 1024+104 = 1128 in the superblock.
-        byte[] head;
-        try (InputStream in = BuildrootDiskTemplateTest.class.getResourceAsStream(
-                FirmwareAssets.CLASSPATH_PREFIX + BuildrootDiskTemplate.ASSET_NAME)) {
-            assertNotNull(in);
-            head = in.readNBytes(1160);
-        }
-        byte[] uuid = new byte[16];
-        System.arraycopy(head, 1128, uuid, 0, 16);
+    @DisplayName("Volume label at offset 1144 matches FILESYSTEM_LABEL")
+    void volumeLabel() throws IOException {
+        // s_volume_name is 16 bytes, NUL-padded, at superblock offset 120.
+        byte[] head = superblockHead();
+        int len = 0;
+        while (len < 16 && head[1144 + len] != 0) len++;
+        String label = new String(head, 1144, len);
+        assertEquals(BuildrootDiskTemplate.FILESYSTEM_LABEL, label,
+                "ext2 volume label drifted from constant — rebuild with -L " +
+                        BuildrootDiskTemplate.FILESYSTEM_LABEL);
+    }
 
-        // FILESYSTEM_UUID is in canonical dashed form. Parse it back to bytes
-        // for comparison against the raw superblock bytes.
+    @Test
+    @DisplayName("Superblock UUID at offset 1128 matches FILESYSTEM_UUID")
+    void superblockUuid() throws IOException {
+        // s_uuid is 16 bytes at superblock offset 104 → byte offset 1128.
+        byte[] head = superblockHead();
         java.util.UUID expected = java.util.UUID.fromString(BuildrootDiskTemplate.FILESYSTEM_UUID);
         long msb = expected.getMostSignificantBits();
         long lsb = expected.getLeastSignificantBits();
         byte[] expectedBytes = new byte[16];
         for (int i = 0; i < 8; i++) expectedBytes[i]     = (byte) (msb >> (56 - 8 * i));
         for (int i = 0; i < 8; i++) expectedBytes[8 + i] = (byte) (lsb >> (56 - 8 * i));
-
-        assertArrayEquals(expectedBytes, uuid,
-                "ext2 superblock UUID at offset 1128 doesn't match BuildrootDiskTemplate.FILESYSTEM_UUID. "
-                        + "Either the asset was rebuilt without tune2fs -U or the constant drifted.");
+        byte[] actualUuid = new byte[16];
+        System.arraycopy(head, 1128, actualUuid, 0, 16);
+        assertArrayEquals(expectedBytes, actualUuid,
+                "ext2 UUID drifted from constant — rebuild with tune2fs -U " +
+                        BuildrootDiskTemplate.FILESYSTEM_UUID);
     }
 }

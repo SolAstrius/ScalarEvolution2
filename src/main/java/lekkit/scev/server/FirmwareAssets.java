@@ -14,6 +14,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
 import java.util.Objects;
+import java.util.zip.CRC32;
 import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
 
@@ -117,9 +118,10 @@ public final class FirmwareAssets {
      *
      * <p>Priority logic:
      * <ul>
-     *   <li>Extracted file matches the bundled copy's size → use the extract
-     *       (cheap cache hit, avoids re-copying the ~30 MB kernel each boot).</li>
-     *   <li>Extracted file exists but bundled copy has different size → the
+     *   <li>Extracted file's CRC32 matches the bundled copy's CRC32 → use the
+     *       extract (cheap cache hit, avoids re-copying the ~65 MB Alpine
+     *       image each boot).</li>
+     *   <li>Extracted file exists but bundled copy has a different CRC → the
      *       mod's bundled asset was updated (e.g. new kernel shipped); the
      *       extract is stale. Re-extract and warn.</li>
      *   <li>Extracted file exists and no bundled copy on the classpath →
@@ -128,10 +130,14 @@ public final class FirmwareAssets {
      *   <li>Neither → {@code null}, caller handles.</li>
      * </ul>
      *
-     * <p>Before April 2026 this method used "extract-wins-silently" semantics,
-     * which meant a stale extract from an older mod version kept getting
-     * loaded forever even after rebuilding the mod with a newer kernel. Size
-     * comparison was added to auto-invalidate the cache on mod upgrade.
+     * <p>History: the original implementation did "extract-wins-silently," so
+     * stale extracts from older mod versions kept loading forever. Size
+     * comparison caught most real upgrades but silently produced stale bytes
+     * when two different builds happened to be the same size (e.g. two
+     * revisions of a 65 MiB partitioned ext4 image). Switched to CRC32 after
+     * an image-contents-differ-but-size-identical bug in the Alpine pipeline.
+     * The CRC stream costs ~200 ms on a 65 MiB asset per boot — acceptable,
+     * runs once-per-asset-per-process, and rules out silent collisions.
      *
      * <p>Thread-safe: synchronized on the class so concurrent extraction
      * attempts don't race.
@@ -148,16 +154,16 @@ public final class FirmwareAssets {
             return target.toAbsolutePath();
         }
         if (targetExists && bundled) {
-            long targetSize = sizeOrMinusOne(target);
-            long bundledSize = bundledSizeOrMinusOne(name);
-            if (targetSize >= 0 && bundledSize >= 0 && targetSize == bundledSize) {
-                // Cache hit — extracted copy matches bundled size, use it.
+            long bundledCrc = bundledCrcOrMinusOne(name);
+            long targetCrc = fileCrcOrMinusOne(target);
+            if (bundledCrc >= 0 && targetCrc >= 0 && targetCrc == bundledCrc) {
+                // Cache hit — extracted copy's CRC matches the bundled copy.
                 return target.toAbsolutePath();
             }
-            LOG.warn("Firmware asset {} on disk ({} bytes) differs from bundled copy ({} bytes); "
+            LOG.warn("Firmware asset {} on disk (CRC={}) differs from bundled copy (CRC={}); "
                             + "re-extracting. If you intentionally customised this file, rename "
                             + "it before the mod upgrade clobbers it again.",
-                    name, targetSize, bundledSize);
+                    name, String.format("%08x", targetCrc), String.format("%08x", bundledCrc));
             // Fall through to re-extract below.
         }
         if (!bundled) {
@@ -225,6 +231,43 @@ public final class FirmwareAssets {
         } catch (IOException e) {
             return -1;
         }
+    }
+
+    /** CRC32 of the on-disk file, or -1 if it can't be read. */
+    private static long fileCrcOrMinusOne(Path target) {
+        try (InputStream in = Files.newInputStream(target)) {
+            return streamCrc(in);
+        } catch (IOException e) {
+            return -1;
+        }
+    }
+
+    /**
+     * CRC32 of the classpath-bundled asset, or -1 if it isn't bundled or
+     * can't be read. Unlike {@link #bundledSizeOrMinusOne} this distinguishes
+     * two bundled assets of identical size but different contents — the
+     * point of switching from size to CRC.
+     */
+    private static long bundledCrcOrMinusOne(String name) {
+        try (InputStream in = FirmwareAssets.class.getResourceAsStream(CLASSPATH_PREFIX + name)) {
+            if (in == null) return -1;
+            return streamCrc(in);
+        } catch (IOException e) {
+            return -1;
+        }
+    }
+
+    /**
+     * Streaming CRC32 — hashes an input stream in 16 KiB chunks. Rolled
+     * manually because {@link java.util.zip.CheckedInputStream} would add
+     * an extra layer and callers already own the stream lifecycle.
+     */
+    private static long streamCrc(InputStream in) throws IOException {
+        CRC32 crc = new CRC32();
+        byte[] buf = new byte[16 * 1024];
+        int n;
+        while ((n = in.read(buf)) > 0) crc.update(buf, 0, n);
+        return crc.getValue();
     }
 
     /**

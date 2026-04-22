@@ -10,6 +10,7 @@ import lekkit.scev.blockentity.PowermarkBlockEntity;
 import lekkit.scev.blockentity.TinkerpadBlockEntity;
 import lekkit.scev.blockentity.WorkstationBlockEntity;
 import lekkit.scev.main.ScevRegistry;
+import lekkit.scev.server.MachineManager;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.server.level.ServerPlayer;
@@ -111,5 +112,31 @@ public class WorkstationBlock extends DirectionalBlock {
             }, buf -> buf.writeBlockPos(pos));
         }
         return InteractionResult.CONSUME;
+    }
+
+    /**
+     * Break-block: tear down the owning {@link MachineManager} entry so the
+     * emulator thread + native RVVM machine are freed. Without this, breaking
+     * a computer case left the VM running forever (audio kept streaming,
+     * server kept emulating) and GC-driven teardown of adjacent Java-side
+     * state — peripheral bus, display manager, sound manager — raced against
+     * the still-live RVVM threadpool. Observed failure mode: SIGSEGV inside
+     * {@code pci_func_send_intx_irq} when a worker fired an IRQ at a
+     * {@code pci_func_t} whose owner was being dismantled.
+     *
+     * <p>Mirrors {@link McuBoardBlock#onRemove} — same pattern, same
+     * "replaced vs. state-changed" guard. The {@code state.is(newState
+     * .getBlock())} check prevents a state-only change (e.g. a facing
+     * update) from tearing the machine down, which would be surprising and
+     * costly.
+     */
+    @Override
+    protected void onRemove(BlockState state, Level level, BlockPos pos, BlockState newState, boolean moved) {
+        if (!state.is(newState.getBlock())) {
+            if (level.getBlockEntity(pos) instanceof ComputerCaseBlockEntity cc) {
+                MachineManager.destroyMachineState(cc.getMachineUUID());
+            }
+        }
+        super.onRemove(state, level, pos, newState, moved);
     }
 }

@@ -6,11 +6,13 @@
 package lekkit.scev.client.screen;
 
 import com.mojang.blaze3d.systems.RenderSystem;
+import lekkit.rvvm.HIDKeyboard;
 import lekkit.scev.client.DisplayManager;
 import lekkit.scev.client.DisplayState;
 import lekkit.scev.menu.MachineMenu;
 import lekkit.scev.network.MachineInputPayload;
 import lekkit.scev.network.MachineResetPayload;
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
@@ -50,8 +52,35 @@ public class MachineScreen extends AbstractContainerScreen<MachineMenu> {
     /** Extra vertical space below the framebuffer for the power/reset buttons. */
     private static final int BUTTON_STRIP_H = 16;
 
+    /**
+     * Cap on how much clipboard text a single Ctrl+Shift+V will type. Past
+     * this, the user is pasting a file — which they should do via a guest-
+     * side transfer, not synthetic keystrokes. 4096 chars at
+     * {@link ClipboardPaster#DEFAULT_EVENTS_PER_TICK}=4 ev/tick / 20 tps =
+     * ~205 s of typing, which is already generous.
+     */
+    private static final int MAX_PASTE_CHARS = 4096;
+
+    /** Modifier HIDs we suppress before typing pasted text so the guest doesn't see Ctrl+letter etc. */
+    private static final byte[] MODIFIER_HIDS = {
+            HIDKeyboard.HID_KEY_LEFTCTRL, HIDKeyboard.HID_KEY_LEFTSHIFT,
+            HIDKeyboard.HID_KEY_LEFTALT, HIDKeyboard.HID_KEY_LEFTMETA,
+            HIDKeyboard.HID_KEY_RIGHTCTRL, HIDKeyboard.HID_KEY_RIGHTSHIFT,
+            HIDKeyboard.HID_KEY_RIGHTALT, HIDKeyboard.HID_KEY_RIGHTMETA,
+    };
+
     /** Tracks keys we've emitted KEY_PRESS for but not yet KEY_RELEASE. */
     private final HeldKeyTracker heldKeys = new HeldKeyTracker(
+            hid -> PacketDistributor.sendToServer(MachineInputPayload.keyPress(hid)),
+            hid -> PacketDistributor.sendToServer(MachineInputPayload.keyRelease(hid)));
+
+    /**
+     * Paces clipboard paste as synthetic keystrokes. Same press/release
+     * sinks as {@link #heldKeys}, but events here aren't tracked as "held"
+     * because they always come in matched press/release pairs inside a
+     * single paste operation.
+     */
+    private final ClipboardPaster paster = new ClipboardPaster(
             hid -> PacketDistributor.sendToServer(MachineInputPayload.keyPress(hid)),
             hid -> PacketDistributor.sendToServer(MachineInputPayload.keyRelease(hid)));
 
@@ -157,6 +186,17 @@ public class MachineScreen extends AbstractContainerScreen<MachineMenu> {
 
     @Override public boolean isPauseScreen() { return false; }
 
+    /**
+     * Client tick hook — fires ~20 times/s. We use it to drain a small
+     * batch of pending paste events, so a large clipboard doesn't burst
+     * past the guest's HID buffer capacity in a single frame.
+     */
+    @Override
+    public void containerTick() {
+        super.containerTick();
+        paster.tick();
+    }
+
     /* ---------------- Input: keyboard ---------------- */
 
     @Override
@@ -164,12 +204,54 @@ public class MachineScreen extends AbstractContainerScreen<MachineMenu> {
         // Leave ESCAPE alone so the player can close the screen.
         if (keyCode == GLFW.GLFW_KEY_ESCAPE) return super.keyPressed(keyCode, scanCode, modifiers);
 
+        // Ctrl+Shift+V (or Cmd+Shift+V on macOS) pastes the host clipboard as
+        // synthetic keystrokes. Plain Ctrl+V still flows through to the guest
+        // — many guest programs use Ctrl+V themselves, so we only claim the
+        // three-modifier combo. The V key itself is consumed (not tracked as
+        // held) so the guest doesn't see a stray 'v' before the paste stream.
+        if (keyCode == GLFW.GLFW_KEY_V
+                && (modifiers & GLFW.GLFW_MOD_SHIFT) != 0
+                && (modifiers & (GLFW.GLFW_MOD_CONTROL | GLFW.GLFW_MOD_SUPER)) != 0) {
+            triggerPaste();
+            return true;
+        }
+
         byte hid = GlfwToHid.map(keyCode);
         if (hid != 0) {
             heldKeys.press(hid);
             return true;
         }
         return super.keyPressed(keyCode, scanCode, modifiers);
+    }
+
+    /**
+     * Read the host clipboard and queue it for typing into the guest. We
+     * first emit release events for any modifier keys the tracker currently
+     * thinks are held (the Ctrl+Shift that triggered us, at minimum) so the
+     * guest doesn't interpret the pasted letters as hotkey chords.
+     *
+     * <p>We don't re-press those modifiers afterwards. If the player is
+     * still holding Ctrl+Shift when paste finishes, GLFW will eventually
+     * fire a release we'll forward normally — the VM sees a release-of-
+     * unheld key, which HID handles as a no-op. The tradeoff is that any
+     * keystrokes the player types between paste-end and their physical
+     * release won't carry the original modifiers; in practice nobody does
+     * that within the short paste window.
+     */
+    private void triggerPaste() {
+        String text = Minecraft.getInstance().keyboardHandler.getClipboard();
+        if (text == null || text.isEmpty()) return;
+        if (text.length() > MAX_PASTE_CHARS) text = text.substring(0, MAX_PASTE_CHARS);
+
+        for (byte mod : MODIFIER_HIDS) {
+            if (heldKeys.isHeld(mod)) {
+                // Release on the wire but leave the tracker's entry in place.
+                // When the player physically releases the key, tracker.release
+                // will forward another release — harmless to the guest.
+                paster.queueRelease(mod);
+            }
+        }
+        paster.queueText(text);
     }
 
     @Override
@@ -255,6 +337,11 @@ public class MachineScreen extends AbstractContainerScreen<MachineMenu> {
 
     @Override
     public void removed() {
+        // Drop any paste events that hadn't been drained yet — they'd arrive
+        // at the guest without the original paste context and potentially
+        // land in the wrong window / tty. Better to lose the tail than to
+        // scatter random characters.
+        paster.clear();
         // Release any keys we've left pressed. Otherwise the VM sees them as
         // stuck down (e.g. shift jammed on) forever. Done through the tracker
         // so HeldKeyTrackerTest can verify the contract without a real screen.

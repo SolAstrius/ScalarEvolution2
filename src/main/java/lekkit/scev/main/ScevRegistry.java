@@ -6,13 +6,17 @@
 package lekkit.scev.main;
 
 import java.util.function.Supplier;
+import lekkit.scev.blocks.CableBlock;
 import lekkit.scev.blocks.DirectionalBlock;
+import lekkit.scev.blocks.FlashProgrammerBlock;
 import lekkit.scev.blocks.KeyboardBlock;
 import lekkit.scev.blocks.McuBoardBlock;
 import lekkit.scev.blocks.WorkstationBlock;
 import lekkit.scev.client.sections.ScevCreativeTab;
 import lekkit.scev.client.sections.ScevSectionRegistry;
+import lekkit.scev.blockentity.CableBlockEntity;
 import lekkit.scev.blockentity.ComputerCaseBlockEntity;
+import lekkit.scev.blockentity.FlashProgrammerBlockEntity;
 import lekkit.scev.blockentity.KeyboardBlockEntity;
 import lekkit.scev.blockentity.McuBoardBlockEntity;
 import lekkit.scev.blockentity.TinkerpadBlockEntity;
@@ -34,6 +38,7 @@ import lekkit.scev.items.StorageItem;
 import lekkit.scev.items.TinkerpadItem;
 import lekkit.scev.machine.storage.DiskTemplateRegistry;
 import lekkit.scev.menu.ComputerCaseMenu;
+import lekkit.scev.menu.FlashProgrammerMenu;
 import lekkit.scev.menu.MachineMenu;
 import lekkit.scev.menu.McuBoardMenu;
 import lekkit.scev.menu.MotherboardMenu;
@@ -116,6 +121,10 @@ public final class ScevRegistry {
             BLOCKS.register("keyboard_mouse", () -> new KeyboardBlock(machineProps(), true));
     public static final DeferredBlock<McuBoardBlock> MCU_BOARD =
             BLOCKS.register("mcu_board", () -> new McuBoardBlock(machineProps()));
+    public static final DeferredBlock<CableBlock> CABLE =
+            BLOCKS.register("cable", () -> new CableBlock(machineProps()));
+    public static final DeferredBlock<FlashProgrammerBlock> FLASH_PROGRAMMER =
+            BLOCKS.register("flash_programmer", () -> new FlashProgrammerBlock(machineProps()));
 
     //
     // Block items
@@ -140,6 +149,10 @@ public final class ScevRegistry {
             ITEMS.register("keyboard_mouse", () -> new BlockItem(KEYBOARD_MOUSE.get(), itemProps()));
     public static final DeferredItem<BlockItem> MCU_BOARD_ITEM =
             ITEMS.register("mcu_board", () -> new BlockItem(MCU_BOARD.get(), singleProps()));
+    public static final DeferredItem<BlockItem> CABLE_ITEM =
+            ITEMS.register("cable", () -> new BlockItem(CABLE.get(), itemProps()));
+    public static final DeferredItem<BlockItem> FLASH_PROGRAMMER_ITEM =
+            ITEMS.register("flash_programmer", () -> new BlockItem(FLASH_PROGRAMMER.get(), singleProps()));
 
     //
     // Raw-material items
@@ -202,7 +215,7 @@ public final class ScevRegistry {
      * predicate accepts both).
      */
     public static final DeferredItem<PreloadedNvmeItem> NVME_PRELOADED = ITEMS.register("nvme_preloaded",
-            () -> new PreloadedNvmeItem(singleProps(), DiskTemplateRegistry.BUILDROOT));
+            () -> new PreloadedNvmeItem(singleProps(), DiskTemplateRegistry.ALPINE));
 
     public static final DeferredItem<PciCardItem> VGA_CARD =
             ITEMS.register("vga_card", () -> new PciCardItem(singleProps(), PciCardItem.Kind.VGA));
@@ -252,6 +265,12 @@ public final class ScevRegistry {
     public static final DeferredHolder<BlockEntityType<?>, BlockEntityType<McuBoardBlockEntity>> MCU_BOARD_BE =
             BLOCK_ENTITY_TYPES.register("mcu_board",
                     () -> BlockEntityType.Builder.of(McuBoardBlockEntity::new, MCU_BOARD.get()).build(null));
+    public static final DeferredHolder<BlockEntityType<?>, BlockEntityType<CableBlockEntity>> CABLE_BE =
+            BLOCK_ENTITY_TYPES.register("cable",
+                    () -> BlockEntityType.Builder.of(CableBlockEntity::new, CABLE.get()).build(null));
+    public static final DeferredHolder<BlockEntityType<?>, BlockEntityType<FlashProgrammerBlockEntity>> FLASH_PROGRAMMER_BE =
+            BLOCK_ENTITY_TYPES.register("flash_programmer",
+                    () -> BlockEntityType.Builder.of(FlashProgrammerBlockEntity::new, FLASH_PROGRAMMER.get()).build(null));
 
     //
     // Menu types
@@ -265,6 +284,8 @@ public final class ScevRegistry {
             MENU_TYPES.register("machine", () -> IMenuTypeExtension.create(MachineMenu::fromNetwork));
     public static final DeferredHolder<MenuType<?>, MenuType<McuBoardMenu>> MCU_BOARD_MENU =
             MENU_TYPES.register("mcu_board", () -> IMenuTypeExtension.create(McuBoardMenu::fromNetwork));
+    public static final DeferredHolder<MenuType<?>, MenuType<FlashProgrammerMenu>> FLASH_PROGRAMMER_MENU =
+            MENU_TYPES.register("flash_programmer", () -> IMenuTypeExtension.create(FlashProgrammerMenu::fromNetwork));
 
     //
     // Creative tabs
@@ -323,6 +344,8 @@ public final class ScevRegistry {
         ScevSectionRegistry.assign(KEYBOARD_ITEM,       SECTION_CASES);
         ScevSectionRegistry.assign(KEYBOARD_MOUSE_ITEM, SECTION_CASES);
         ScevSectionRegistry.assign(MCU_BOARD_ITEM,      SECTION_CASES);
+        ScevSectionRegistry.assign(CABLE_ITEM,          SECTION_CASES);
+        ScevSectionRegistry.assign(FLASH_PROGRAMMER_ITEM, SECTION_CASES);
 
         // Crafting — tools + raw materials + fabricated intermediate
         // components. Groups the whole "benchtop fabrication" flow.

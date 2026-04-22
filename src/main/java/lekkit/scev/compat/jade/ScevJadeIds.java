@@ -16,9 +16,12 @@ import net.minecraft.resources.ResourceLocation;
 final class ScevJadeIds {
     private ScevJadeIds() {}
 
-    static final ResourceLocation COMPUTER_CASE = id("computer_case");
-    static final ResourceLocation MCU_BOARD     = id("mcu_board");
-    static final ResourceLocation VT100         = id("vt100");
+    static final ResourceLocation COMPUTER_CASE    = id("computer_case");
+    static final ResourceLocation MCU_BOARD        = id("mcu_board");
+    static final ResourceLocation VT100            = id("vt100");
+    static final ResourceLocation CRT_MONITOR      = id("crt_monitor");
+    static final ResourceLocation KEYBOARD         = id("keyboard");
+    static final ResourceLocation FLASH_PROGRAMMER = id("flash_programmer");
 
     private static ResourceLocation id(String path) {
         return ResourceLocation.fromNamespaceAndPath(ScalarEvolution.MODID, path);

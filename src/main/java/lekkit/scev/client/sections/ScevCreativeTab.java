@@ -20,6 +20,11 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.screens.inventory.CreativeModeInventoryScreen;
+import lekkit.scev.items.FlashFirmware;
+import lekkit.scev.items.FlashItem;
+import lekkit.scev.items.PreloadedNvmeItem;
+import lekkit.scev.machine.storage.DiskTemplateRegistry;
+import lekkit.scev.main.ScevDataComponents;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
@@ -105,8 +110,30 @@ public final class ScevCreativeTab {
         for (Item item : BuiltInRegistries.ITEM) {
             ResourceLocation sectionId = ScevSectionRegistry.sectionOf(item);
             if (sectionId == null) continue;
-            bySection.computeIfAbsent(sectionId, k -> new ArrayList<>())
-                    .add(item.getDefaultInstance());
+            List<ItemStack> bucket = bySection.computeIfAbsent(sectionId, k -> new ArrayList<>());
+            if (item instanceof FlashItem) {
+                // One stack per firmware kind (BLANK, LINUX, OPENSBI, OPEN_FW,
+                // BLINKY) so every built-in firmware is discoverable in creative.
+                // No recipe exists for non-BLINKY stamps today — this is the
+                // only survival-adjacent way to obtain them.
+                for (FlashFirmware kind : FlashFirmware.values()) {
+                    ItemStack stack = new ItemStack(item);
+                    stack.set(ScevDataComponents.FIRMWARE_KIND.get(), kind);
+                    bucket.add(stack);
+                }
+            } else if (item instanceof PreloadedNvmeItem) {
+                // One stack per registered disk template (BUILDROOT, ALPINE,
+                // and whatever else gets added later) so every preloaded
+                // distro surfaces in creative without needing a separate
+                // item registration per template.
+                for (ResourceLocation templateId : DiskTemplateRegistry.ids()) {
+                    ItemStack stack = new ItemStack(item);
+                    stack.set(ScevDataComponents.DISK_TEMPLATE.get(), templateId);
+                    bucket.add(stack);
+                }
+            } else {
+                bucket.add(item.getDefaultInstance());
+            }
         }
 
         // Build an ordered list of (sectionId, section, items) triples

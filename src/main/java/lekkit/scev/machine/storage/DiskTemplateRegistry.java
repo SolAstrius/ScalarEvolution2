@@ -43,6 +43,13 @@ public final class DiskTemplateRegistry {
      */
     public static final ResourceLocation BUILDROOT = rl("buildroot");
 
+    /**
+     * Alpine Linux 3.23 live image produced by the scev-alpine build
+     * pipeline. Bootable in-place via the OPEN_FIRMWARE flash chip; see
+     * {@link AlpineDiskTemplate} for the full layout.
+     */
+    public static final ResourceLocation ALPINE = rl("alpine");
+
     private DiskTemplateRegistry() {}
 
     /**
@@ -100,6 +107,7 @@ public final class DiskTemplateRegistry {
      */
     public static synchronized void registerBuiltins() {
         register(BUILDROOT, BuildrootDiskTemplate.INSTANCE);
+        register(ALPINE,    AlpineDiskTemplate.INSTANCE);
     }
 
     private static ResourceLocation rl(String path) {

@@ -84,11 +84,11 @@ class DiskTemplateRegistryTest {
     }
 
     @Test
-    @DisplayName("registerBuiltins installs BUILDROOT -> BuildrootDiskTemplate")
+    @DisplayName("registerBuiltins installs BUILDROOT + ALPINE disk templates")
     void builtinsInstallsBuildroot() {
         DiskTemplateRegistry.registerBuiltins();
-        assertEquals(1, DiskTemplateRegistry.size(),
-                "Exactly one built-in template today (BUILDROOT). If you added another, "
+        assertEquals(2, DiskTemplateRegistry.size(),
+                "Two built-in templates today (BUILDROOT + ALPINE). If you added another, "
                         + "update this test AND add targeted coverage for the new template's "
                         + "metadata (assetName/sizeMb/displayName).");
         ScevDiskTemplate buildroot = DiskTemplateRegistry.get(DiskTemplateRegistry.BUILDROOT);
@@ -96,6 +96,10 @@ class DiskTemplateRegistryTest {
         assertSame(BuildrootDiskTemplate.INSTANCE, buildroot,
                 "BUILDROOT must point at the BuildrootDiskTemplate singleton — any other "
                         + "instance would mean duplicate registration or a rewritten entry.");
+
+        ScevDiskTemplate alpine = DiskTemplateRegistry.get(DiskTemplateRegistry.ALPINE);
+        assertNotNull(alpine, "ALPINE must resolve after registerBuiltins");
+        assertSame(lekkit.scev.machine.storage.AlpineDiskTemplate.INSTANCE, alpine);
     }
 
     @Test

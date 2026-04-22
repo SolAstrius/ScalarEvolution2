@@ -1,6 +1,7 @@
 plugins {
     id 'java-library'
     id 'idea'
+    id 'org.jetbrains.kotlin.jvm' version '2.2.0'
     id 'net.neoforged.moddev' version '2.0.78'
 }
 
@@ -18,6 +19,32 @@ repositories {
         url = "https://api.modrinth.com/maven"
         content { includeGroup "maven.modrinth" }
     }
+    // CC: Tweaked — for the IPeripheral / IComputerAccess surface used
+    // by lekkit.scev.compat.cc.*. Soft-dep: CC need not be installed at
+    // runtime; the compat layer self-isolates behind a ModList check.
+    maven {
+        name = "squiddev"
+        url = "https://maven.squiddev.cc"
+        content { includeGroup "cc.tweaked" }
+    }
+    // JEI (Just Enough Items) — dev-time only. Modrinth's maven collides
+    // all three loader variants (fabric/forge/neoforge) on a single version
+    // number and resolves to fabric first, so pull from BlameJared's maven
+    // where the loader is baked into the artifactId.
+    maven {
+        name = "BlameJared"
+        url = "https://maven.blamejared.com"
+        content { includeGroup "mezz.jei" }
+    }
+    // JitPack hosts on-demand builds of GitHub projects. Used for Concentus,
+    // a pure-Java Opus codec that has no Maven Central release. Scoped to
+    // the concentus group so an unrelated mod shipping its own JitPack dep
+    // can't accidentally resolve through our declaration.
+    maven {
+        name = "JitPack"
+        url = "https://jitpack.io"
+        content { includeGroup "com.github.lostromb.concentus" }
+    }
 }
 
 base {
@@ -25,6 +52,14 @@ base {
 }
 
 java.toolchain.languageVersion = JavaLanguageVersion.of(java_version as Integer)
+
+// Kotlin — align the JVM target with Java's toolchain so stdlib / coroutines /
+// whatever else we jarJar stays loadable by the Minecraft process (Java 21).
+// The Kotlin plugin otherwise defaults to 1.8 which would emit bytecode
+// compatible with a runtime we never ship to.
+kotlin {
+    jvmToolchain(java_version as Integer)
+}
 
 neoForge {
     version = project.neo_version
@@ -71,8 +106,70 @@ neoForge {
 sourceSets.main.resources { srcDir 'src/generated/resources' }
 
 dependencies {
+    // Kotlin stdlib — jarJar'd into the shipped mod jar so we don't require
+    // Kotlin for Forge (KFF) as a separate runtime mod. The Kotlin plugin
+    // already puts stdlib on the compile+dev-runtime classpath, so this line
+    // is purely about making the production jar self-contained. Version
+    // range [2.0, 3.0) lets NeoForge's nested-jar resolver coexist with
+    // other Kotlin-using mods by picking the newest compatible stdlib.
+    //
+    // Unlike the opus naive natives further down (which hand-roll their own
+    // META-INF/jarjar entries to dodge module-name collisions), stdlib is a
+    // single jar with a unique module name, so the standard plugin DSL
+    // works fine here.
+    jarJar(implementation("org.jetbrains.kotlin:kotlin-stdlib")) {
+        version {
+            strictly "[2.0, 3.0)"
+            prefer "2.2.0"
+        }
+    }
+    // NeoForge's ModuleClassLoader sees only `additionalRuntimeClasspath`
+    // during dev runs (runClient / runData / runGameTestServer), not
+    // Gradle's regular `implementation` classpath. Without this entry,
+    // dev-mode datagen constructs every mod — including any Kotlin code
+    // transitively reachable from mod init (e.g. ScevCCBootstrap) — and
+    // NoClassDefFoundErrors on kotlin.jvm.functions.Function1 as soon as
+    // a `.kt` file touches an init path. `implementation` above still
+    // makes the production jar self-contained via jarJar.
+    additionalRuntimeClasspath 'org.jetbrains.kotlin:kotlin-stdlib:2.2.0'
+
+    // Coroutines — jarJar'd ahead of the first concurrency port (likely
+    // SoundStreamManager's ring-buffer → channel/actor refactor) so that
+    // PR doesn't have to rewire the build. Range floor is 1.8 because
+    // structured-concurrency / Flow APIs pre-1.8 have diverged enough that
+    // dedup-to-older by NeoForge's resolver would surprise-break us.
+    //
+    // Targeting `-jvm` directly (not the bare `kotlinx-coroutines-core`):
+    // coroutines ships as a Kotlin Multiplatform module where the base
+    // artifact is a capability-only redirect. Moddev's jarJar resolver
+    // reads Gradle Module Metadata first and ends up with the KMP
+    // capability coordinates — which look like `kotlinx.coroutines.core`
+    // (dotted) plus a hash `artifactVersion` in the emitted metadata.json.
+    // Pointing at `-jvm` skips the redirect and yields sane Maven
+    // coordinates (`kotlinx-coroutines-core-jvm` / `1.10.2`).
+    //
+    // `transitive = false` keeps the resolver from dragging in another
+    // copy of kotlin-stdlib through coroutines' transitive graph — we
+    // already ship one above, and two jarJar entries targeting the same
+    // {group, artifact} would trigger moddev's dedupe.
+    jarJar(implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm")) {
+        version {
+            strictly "[1.8, 2.0)"
+            prefer "1.10.2"
+        }
+        transitive = false
+    }
+    // Same reason as the kotlin-stdlib line above: dev runs need
+    // coroutines-core on the ModuleClassLoader-visible classpath.
+    additionalRuntimeClasspath 'org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:1.10.2'
+
     testImplementation 'org.junit.jupiter:junit-jupiter-api:5.11.3'
     testImplementation 'org.junit.jupiter:junit-jupiter-engine:5.11.3'
+    testImplementation 'org.junit.jupiter:junit-jupiter-params:5.11.3'
+    // runTest + StandardTestDispatcher for the suspend-based RPC /
+    // peripheral dispatch tests. Version range matches the jarJar'd
+    // kotlinx-coroutines-core-jvm above.
+    testImplementation 'org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2'
 
     // Jade HUD integration — compile against the full jar (API-only artifact
     // is not published to Modrinth). No hard dep: our compat classes live
@@ -80,40 +177,76 @@ dependencies {
     compileOnly "maven.modrinth:jade:${jade_version}+neoforge"
     runtimeOnly "maven.modrinth:jade:${jade_version}+neoforge"
 
-    // Opus codec for server-side compression of the HDA audio stream.
-    // 48 kHz mono 16-bit PCM (768 kbps) -> Opus @ 64 kbps (12x smaller,
-    // music-grade quality). LWJGL 3.3.3 matches Minecraft 1.21.1's own
-    // LWJGL version, so there's no classloader/version conflict.
+    // CC: Tweaked — IPeripheral / IComputerAccess API for the lekkit.scev.
+    // compat.cc package. compileOnly so shipping jars stay slim; the full
+    // mod is pulled as a runtime dep so dev runs exercise real CC.
+    // ScevCCPeripheral is behind a ModList.isLoaded check so servers
+    // without CC installed load scev fine.
+    compileOnly "cc.tweaked:cc-tweaked-${minecraft_version}-core-api:${cc_tweaked_version}"
+    compileOnly "cc.tweaked:cc-tweaked-${minecraft_version}-forge-api:${cc_tweaked_version}"
+    runtimeOnly "cc.tweaked:cc-tweaked-${minecraft_version}-forge:${cc_tweaked_version}"
+    // testCompileOnly mirrors the compileOnly above — the
+    // lekkit.scev.test.cc tests import IPeripheral / IArguments / etc
+    // to dispatch against hand-rolled fake peripherals.
+    testCompileOnly "cc.tweaked:cc-tweaked-${minecraft_version}-core-api:${cc_tweaked_version}"
+    testCompileOnly "cc.tweaked:cc-tweaked-${minecraft_version}-forge-api:${cc_tweaked_version}"
+    // testImplementation on the full forge mod so integration tests
+    // (e.g. lekkit.scev.test.cc.CcPrinterIntegrationTest) can reference
+    // real first-party peripherals like PrinterPeripheral /
+    // PrinterBlockEntity / NetworkedTerminal directly from CC's JARs
+    // at both compile and run time. Paired with neoForge.unitTest
+    // providing Minecraft, this is enough to construct a real
+    // PrinterPeripheral(mockedBE) and exercise the full scev RPC →
+    // CC dispatch → peripheral chain. The -forge-api testCompileOnly
+    // above stays because it scopes the narrower API surface our
+    // production compat layer uses.
+    testImplementation "cc.tweaked:cc-tweaked-${minecraft_version}-forge:${cc_tweaked_version}"
+    // Mockito 5.x defaults to the inline mockmaker — can mock final
+    // classes (PrinterBlockEntity is `final`) without extra agent
+    // wiring. Used only in the CC integration test; pure JVM state
+    // machine for the printer's paper/ink/page fields.
+    testImplementation 'org.mockito:mockito-core:5.15.2'
+    testImplementation 'org.mockito.kotlin:mockito-kotlin:5.4.0'
+
+    // JEI — dev-time recipe browser. runtimeOnly because we don't write any
+    // JEI plugin code (yet); having it in dev makes recipe debugging sane.
+    // Not shipped in the built jar.
+    runtimeOnly "mezz.jei:jei-${minecraft_version}-neoforge:${jei_version}"
+
+    // Opus codec (Concentus, pure-Java). Compresses the HDA audio stream:
+    // 48 kHz mono 16-bit PCM (768 kbps) -> Opus @ 128 kbps VBR music-tuned.
     //
-    // Three-layer setup (required by NeoForge's module classloader):
-    //   - `compileOnly` — javac sees Opus at compile-time.
-    //   - `additionalRuntimeClasspath` — adds to runClient /
-    //     runGameTestServer game classpath OUTSIDE the mod module
-    //     system, so the ModuleClassLoader can find it. Plain
-    //     `implementation` puts classes on gradle's runtimeClasspath but
-    //     NeoForge's FML ModuleClassLoader doesn't see them — results
-    //     in NoClassDefFoundError at runtime in dev.
-    //   - `jarJar` — bundled INSIDE the shipped mod jar so end users'
-    //     Minecraft installs load it automatically via NeoForge's
-    //     nested-jar discovery, no separate library install needed.
+    // Pinned to the master HEAD at 2025-09-27 via JitPack's commit-hash
+    // addressing — Concentus has no Maven Central release, but its
+    // bit-exact Java port of libopus 1.x is stable enough that a
+    // pinned commit is effectively a version. Direct version string
+    // (no strictly/prefer range) because JitPack commit hashes aren't
+    // semver-ordered and NeoForge's version-range resolver rejects
+    // them if declared as a range preference.
     //
-    // Natives: list all Minecraft-supported classifiers so the shipped
-    // jar is portable. NeoForge filters by runtime OS/arch at load.
-    compileOnly 'org.lwjgl:lwjgl-opus:3.3.3'
-    additionalRuntimeClasspath 'org.lwjgl:lwjgl-opus:3.3.3'
-    additionalRuntimeClasspath 'org.lwjgl:lwjgl-opus:3.3.3:natives-macos-arm64'
-    additionalRuntimeClasspath 'org.lwjgl:lwjgl-opus:3.3.3:natives-macos'
-    additionalRuntimeClasspath 'org.lwjgl:lwjgl-opus:3.3.3:natives-linux'
-    additionalRuntimeClasspath 'org.lwjgl:lwjgl-opus:3.3.3:natives-linux-arm64'
-    additionalRuntimeClasspath 'org.lwjgl:lwjgl-opus:3.3.3:natives-windows'
-    additionalRuntimeClasspath 'org.lwjgl:lwjgl-opus:3.3.3:natives-windows-arm64'
-    jarJar(group: 'org.lwjgl', name: 'lwjgl-opus', version: '[3.3.3,3.4)')
-    jarJar(group: 'org.lwjgl', name: 'lwjgl-opus', version: '[3.3.3,3.4)', classifier: 'natives-macos-arm64')
-    jarJar(group: 'org.lwjgl', name: 'lwjgl-opus', version: '[3.3.3,3.4)', classifier: 'natives-macos')
-    jarJar(group: 'org.lwjgl', name: 'lwjgl-opus', version: '[3.3.3,3.4)', classifier: 'natives-linux')
-    jarJar(group: 'org.lwjgl', name: 'lwjgl-opus', version: '[3.3.3,3.4)', classifier: 'natives-linux-arm64')
-    jarJar(group: 'org.lwjgl', name: 'lwjgl-opus', version: '[3.3.3,3.4)', classifier: 'natives-windows')
-    jarJar(group: 'org.lwjgl', name: 'lwjgl-opus', version: '[3.3.3,3.4)', classifier: 'natives-windows-arm64')
+    // Perf delta vs libopus native: ~2-3× slower encode, identical
+    // output. At 50 frames/sec × 20 ms complexity-10 that's fractions
+    // of a core per active stream — negligible compared to the
+    // emulated VMs sharing the same thread.
+    //
+    // This replaces a ~250-line build.gradle dance (six LWJGL-opus
+    // native jars that all declared the same Automatic-Module-Name,
+    // requiring a custom repack task + hand-rolled META-INF/jarjar
+    // metadata merge to coexist with moddev's jarJar plugin).
+    jarJar(implementation('com.github.lostromb.concentus:Concentus:3885c4e465'))
+    additionalRuntimeClasspath 'com.github.lostromb.concentus:Concentus:3885c4e465'
+}
+
+tasks.named('jar').configure {
+    // runData (via NeoForge's `data` run) emits blockstate JSONs and item
+    // model JSONs into src/generated/resources, which sourceSets above
+    // registers as an additional resource root. Without this dependency a
+    // clean `./gradlew build` produces a jar with no blockstates / models,
+    // which renders as pink "missing texture" in-game — that's the symptom
+    // we hit after the clean/jar cycle didn't run datagen. Committing the
+    // generated/ dir would also work but the NeoForge convention keeps
+    // them out of git and regenerates them on demand.
+    dependsOn 'runData'
 }
 
 tasks.withType(JavaCompile).configureEach {
@@ -197,18 +330,32 @@ ext.rvvmLibName = {
 }
 
 /**
+ * Output file name for the OpenH264 JNI wrapper on the host platform.
+ * Matches what `System.mapLibraryName("scev_h264")` returns, so
+ * `NativeLoader.loadLibrary("scev_h264")` finds the file at runtime.
+ */
+ext.scevH264LibName = {
+    String osn = System.getProperty('os.name').toLowerCase()
+    if (osn.contains('mac'))     return 'libscev_h264.dylib'
+    if (osn.contains('windows')) return 'scev_h264.dll'
+    return 'libscev_h264.so'
+}
+
+/**
  * Clone or update the upstream RVVM source tree to {@code build/rvvm-src} at
  * the configured ref. Idempotent; does a fresh fetch + hard-reset each run to
  * keep the local checkout aligned with the remote ref (which moves).
  */
 tasks.register('fetchRvvmSrc') {
     group = 'native'
-    description = "Clone or update LekKit/RVVM@${rvvmRef} under build/rvvm-src"
+    description = "Clone or update ${rvvmUpstream}@${rvvmRef} under build/rvvm-src"
     // Intentionally NOT declaring outputs.dir: Gradle pre-creates declared
     // output directories, which would make the fresh-vs-update check below
     // always take the "update" branch on the first run — `git fetch` into a
-    // non-repo dir fails. Keep the task input-tracked on just rvvmRef.
+    // non-repo dir fails. Keep the task input-tracked on ref + URL so a
+    // change to either invalidates downstream tasks.
     inputs.property('rvvmRef', rvvmRef)
+    inputs.property('rvvmUpstream', rvvmUpstream)
 
     doLast {
         def gitDir = new File(rvvmSrcDir, '.git')
@@ -225,6 +372,40 @@ tasks.register('fetchRvvmSrc') {
                         rvvmUpstream, rvvmSrcDir.absolutePath
             }
         } else {
+            // Reconcile origin URL with rvvmUpstream. Without this, switching
+            // rvvmUpstream (e.g. to a fork carrying extra patches) has no
+            // effect on an existing checkout: `git fetch origin` keeps pulling
+            // from the old URL and the shipped .so silently lags behind the
+            // Java side that expects the fork's new symbols.
+            //
+            // We compare by owner/repo identity, not raw URL, so that
+            // contributors can `git remote set-url origin git@github.com:...`
+            // to push via SSH without this task clobbering the change back
+            // to HTTPS every build. Both
+            //   https://github.com/pufit/RVVM.git
+            //   git@github.com:pufit/RVVM.git
+            // point at the same repo; either is fine for fetch + push.
+            def currentUrl = new ByteArrayOutputStream().withStream { os ->
+                exec {
+                    workingDir rvvmSrcDir
+                    commandLine 'git', 'remote', 'get-url', 'origin'
+                    standardOutput = os
+                }
+                os.toString().trim()
+            }
+            def repoKey = { String url ->
+                // Strip scheme, user, host, trailing .git — leaves "owner/repo".
+                String u = url ?: ''
+                u = u.replaceFirst(/^(?:https?|ssh):\/\/[^\/@]+(?::[^@]*)?@?[^\/]+\//, '')
+                     .replaceFirst(/^git@[^:]+:/, '')
+                     .replaceFirst(/\.git$/, '')
+                     .toLowerCase()
+                return u
+            }
+            if (repoKey(currentUrl) != repoKey(rvvmUpstream)) {
+                logger.lifecycle("rvvm-src origin is ${currentUrl}, expected ${rvvmUpstream} — updating remote")
+                exec { workingDir rvvmSrcDir; commandLine 'git', 'remote', 'set-url', 'origin', rvvmUpstream }
+            }
             exec { workingDir rvvmSrcDir; commandLine 'git', 'fetch', '--depth', '1', 'origin', rvvmRef }
             exec { workingDir rvvmSrcDir; commandLine 'git', 'reset', '--hard', "origin/${rvvmRef}" }
         }
@@ -249,18 +430,35 @@ tasks.register('buildRvvmNative') {
     def destDir  = file("src/main/resources/natives/${rvvmClassifier()}")
     def destFile = new File(destDir, rvvmLibName())
     outputs.file destFile
-    // Re-run if the upstream ref has moved, even if destFile is already present.
+    // Re-run whenever upstream source identity changes, even if destFile is
+    // already present from a previous build against a different ref/fork.
     inputs.property('rvvmRef', rvvmRef)
+    inputs.property('rvvmUpstream', rvvmUpstream)
+    // And track the actual checked-out commit so a moving branch (e.g.
+    // staging) still invalidates us when the tip advances.
+    inputs.property('rvvmSrcHead', { ->
+        def head = new File(rvvmSrcDir, '.git/HEAD')
+        if (!head.exists()) return ''
+        def ref = head.text.trim()
+        if (ref.startsWith('ref: ')) {
+            def refFile = new File(rvvmSrcDir, ".git/${ref.substring(5)}")
+            return refFile.exists() ? refFile.text.trim() : ref
+        }
+        return ref
+    })
 
     doLast {
         def built = new File(rvvmSrcDir, "release.${rvvmHostTriple()}/${rvvmLibName()}")
 
-        if (!built.exists()) {
-            logger.lifecycle("Building librvvm via RVVM's Makefile (target: lib USE_JNI=1)...")
-            exec {
-                workingDir rvvmSrcDir
-                commandLine 'make', 'lib', 'USE_JNI=1', "-j${Runtime.runtime.availableProcessors()}"
-            }
+        // Always invoke make — it's internally incremental, so the no-op cost
+        // is trivial and it guarantees we pick up source updates. The previous
+        // `if (!built.exists())` guard was a correctness bug: once an initial
+        // build had happened, switching the upstream fork/ref would leave the
+        // stale .so in place because make was never re-run.
+        logger.lifecycle("Building librvvm via RVVM's Makefile (target: lib USE_JNI=1)...")
+        exec {
+            workingDir rvvmSrcDir
+            commandLine 'make', 'lib', 'USE_JNI=1', "-j${Runtime.runtime.availableProcessors()}"
         }
 
         if (!built.exists()) {
@@ -278,6 +476,339 @@ tasks.register('buildRvvmNative') {
 // host's librvvm. Skippable via `-x buildRvvmNative` when iterating on
 // Java-only changes.
 processResources.dependsOn 'buildRvvmNative'
+
+// --------------------------------------------------------------------
+// OpenH264 JNI wrapper native — vendored + built via zig
+// --------------------------------------------------------------------
+// The H.264 codec lives in a self-contained JNI library alongside
+// librvvm:
+//
+//   vendor/openh264/            vendored Cisco OpenH264 source (v2.6.0)
+//   native/openh264-jni/        our thin JNI wrapper + Makefile
+//   src/main/resources/natives/<classifier>/libscev_h264.*
+//                               final product, statically linked
+//
+// Build pipeline (`buildH264Native`):
+//   1. Mirror vendor/openh264/ to build/openh264-src/ — OpenH264's own
+//      Makefile is an in-tree build (writes .o/.a next to sources); we
+//      keep the committed vendor tree clean by doing the actual build
+//      in build/.
+//   2. Invoke native/openh264-jni/Makefile with OPENH264_SRC pointed at
+//      build/openh264-src/. That Makefile first builds libopenh264.a
+//      (zig c++, USE_ASM=No), then compiles scev_h264.c (zig cc) and
+//      links both into a single libscev_h264.{so,dylib,dll}.
+//   3. Copy the output into src/main/resources/natives/<classifier>/.
+//
+// Same CI artifact story as librvvm: per-platform matrix jobs build
+// their own libscev_h264, the main build job downloads all three into
+// the classifier dirs. See .github/workflows/ci.yml.
+
+ext.openh264VendorDir = file('vendor/openh264')
+ext.openh264BuildSrc  = file("${buildDir}/openh264-src")
+
+/**
+ * Mirror the vendored OpenH264 source into build/openh264-src/ so the
+ * in-tree build (.o, .a) doesn't pollute the committed vendor copy.
+ * Gradle's Copy-task up-to-date check makes this effectively a no-op
+ * on repeat runs unless the vendor tree actually changes.
+ */
+tasks.register('prepareOpenH264Src', Copy) {
+    group = 'native'
+    description = 'Mirror vendor/openh264/ to build/openh264-src/ for an out-of-tree build.'
+    from openh264VendorDir
+    into openh264BuildSrc
+}
+
+/**
+ * Build libscev_h264.{so,dylib,dll} for the host platform. Requires
+ * zig + make on PATH. On NixOS the dev shell (see flake.nix) brings
+ * both in; CI installs zig via mlugg/setup-zig and uses the runner's
+ * default make (MSYS2's on Windows).
+ */
+tasks.register('buildH264Native') {
+    group = 'native'
+    description = 'Build libscev_h264 for the host platform and drop into src/main/resources/natives/'
+    dependsOn 'prepareOpenH264Src'
+
+    def jniSrcDir = file('native/openh264-jni')
+    def destDir   = file("src/main/resources/natives/${rvvmClassifier()}")
+    def destFile  = new File(destDir, scevH264LibName())
+    outputs.file destFile
+
+    // Input tracking is against the committed vendor tree, not the
+    // copied build/openh264-src/: CI's main-build job downloads a
+    // pre-built libscev_h264 artifact, and we want gradle's up-to-date
+    // check to skip `make` in that case without needing zig on the
+    // main runner. Vendor tree content is what actually determines
+    // whether rebuilding is necessary.
+    inputs.dir(openh264VendorDir)
+    inputs.file(new File(jniSrcDir, 'scev_h264.c'))
+    inputs.file(new File(jniSrcDir, 'Makefile'))
+
+    doLast {
+        destDir.mkdirs()
+        def jdkPath = System.getProperty('java.home')
+        logger.lifecycle("Building ${destFile.name} via native/openh264-jni/Makefile (zig cc)...")
+        exec {
+            workingDir jniSrcDir
+            commandLine 'make', "-j${Runtime.runtime.availableProcessors()}"
+            environment 'JAVA_HOME', jdkPath
+            environment 'OPENH264_SRC', openh264BuildSrc.absolutePath
+            environment 'OUTPUT', destFile.absolutePath
+        }
+        if (!destFile.exists()) {
+            throw new GradleException("H.264 native build did not produce ${destFile} — check `make` output above")
+        }
+        logger.lifecycle("Installed ${destFile.name} -> ${destDir}")
+    }
+}
+
+processResources.dependsOn 'buildH264Native'
+
+// --------------------------------------------------------------------
+// Alpine preloaded-NVMe image — assembled locally from parts
+// --------------------------------------------------------------------
+// The Alpine NVMe image is an ext4 filesystem wrapped in an MBR, with
+// a scev-patched Linux kernel + modules + Alpine userspace inside. We
+// assemble it on the mod side rather than fetching a pre-built copy
+// because image-level concerns (cmdline, partition size, apkovl
+// content) evolve faster than the kernel itself and rebuilding the
+// whole scev-alpine kernel to iterate on an extlinux.conf tweak is
+// wasteful.
+//
+// Pipeline:
+//   1. Fetch vmlinuz-lts + modloop-lts from scev-alpine/latest release
+//      (the kernel pieces — rebuilt by scev-alpine CI on every push).
+//   2. Fetch alpine-uboot-<ver>-riscv64.tar.gz from dl-cdn.alpinelinux.org
+//      (Alpine's stock boot layout: extlinux.conf, initramfs, apks repo).
+//   3. Extract tarball, overlay our kernel + modloop, patch extlinux.conf
+//      to route console to our UART + framebuffer.
+//   4. truncate + sfdisk (MBR with one bootable ext4 partition).
+//   5. mkfs.ext4 -E offset= inside the partition window with content
+//      from the staging dir.
+//
+// Host tools required: tar, truncate, sfdisk, mkfs.ext4. Linux-friendly;
+// macOS/Windows devs need them via WSL, brew (util-linux + e2fsprogs),
+// or a nix-shell (the flake in the repo root has them).
+ext.alpineKernelRepo       = 'SolAstrius/scev-alpine'
+ext.alpineKernelTag        = 'latest'
+ext.alpineVersion          = '3.23.4'
+ext.alpineVersionBranch    = '3.23'    // for URL path: releases/v<branch>/riscv64/
+// modloop_verify=no: Alpine signs modloop-lts with its own key, and its
+// initramfs injects the corresponding signature into /var/cache/misc/
+// every boot. Since scev-alpine builds its own modloop, that stale sig
+// fails verification — harmless (the modloop still mounts), but prints a
+// red [!] "Failed to verify signature of modloop-lts!" on every boot.
+// Signing properly would require either rebuilding the initramfs with
+// our own key (large CI change) or a custom sysinit service that nukes
+// Alpine's stale sig before the modloop service runs (brittle). The
+// threat model here doesn't justify either — the VM image is already
+// modifiable from the Minecraft save files by any attacker who can reach
+// them. Turn the check off at the kernel cmdline level and move on.
+ext.alpineExtlinuxAppend   = 'modules=loop,squashfs,sd-mod,usb-storage ' +
+                             'modloop_verify=no ' +
+                             'console=ttyS0,115200 earlycon=sbi console=tty0'
+ext.alpinePartStartKb      = 1024      // standard 1 MiB alignment
+ext.alpineFsHeadroomPct    = 20
+ext.alpineFsLabel          = 'SCEV_ALPINE'
+ext.alpineFsUuid           = 'deadbeef-cafe-beef-feed-a1befacefeed'
+// First-boot apkovl: DHCP on eth0 + online main/community repos so
+// `apk add <anything>` works out of the box. Alpine init-stage-1 picks
+// up *.apkovl.tar.gz from the boot-media root and extracts it over /.
+ext.alpineApkovlEnabled    = true
+
+tasks.register('assembleAlpineImage') {
+    group = 'native'
+    description = "Assemble Alpine preloaded-NVMe image from ${alpineKernelRepo}@${alpineKernelTag} + Alpine upstream"
+
+    def alpineBuildDir = file("${buildDir}/alpine")
+    def destFile = file('src/main/resources/assets/scev/firmware/alpine_rootfs.img')
+
+    outputs.file destFile
+    // Bust the cache whenever any of the image-shaping knobs change.
+    // Re-running the whole assembly is cheap (~10 s with warm downloads)
+    // so liberal invalidation is fine.
+    inputs.property('alpineKernelTag', alpineKernelTag)
+    inputs.property('alpineKernelRepo', alpineKernelRepo)
+    inputs.property('alpineVersion', alpineVersion)
+    inputs.property('alpineExtlinuxAppend', alpineExtlinuxAppend)
+    inputs.property('alpinePartStartKb', alpinePartStartKb)
+    inputs.property('alpineFsHeadroomPct', alpineFsHeadroomPct)
+    inputs.property('alpineFsLabel', alpineFsLabel)
+    inputs.property('alpineFsUuid', alpineFsUuid)
+    inputs.property('alpineApkovlEnabled', alpineApkovlEnabled)
+
+    doLast {
+        alpineBuildDir.mkdirs()
+
+        def vmlinuz = new File(alpineBuildDir, 'vmlinuz-lts')
+        def modloop = new File(alpineBuildDir, 'modloop-lts')
+        def tarball = new File(alpineBuildDir, "alpine-uboot-${alpineVersion}-riscv64.tar.gz")
+
+        // Streaming download helper. Skips when the file is already
+        // present at non-zero size — we rely on the upstream URL being
+        // immutable for a pinned tag; the rolling `latest` tag can be
+        // force-refreshed by deleting build/alpine/.
+        def download = { urlStr, target ->
+            if (target.exists() && target.length() > 0) {
+                logger.info("cached: ${target.name}")
+                return
+            }
+            logger.lifecycle("Fetching ${urlStr}")
+            def tmp = new File(target.parentFile, target.name + '.part')
+            try {
+                new URL(urlStr).withInputStream { input ->
+                    tmp.withOutputStream { output -> output << input }
+                }
+                tmp.renameTo(target)
+            } finally {
+                if (tmp.exists()) tmp.delete()
+            }
+        }
+
+        download("https://github.com/${alpineKernelRepo}/releases/download/${alpineKernelTag}/vmlinuz-lts", vmlinuz)
+        download("https://github.com/${alpineKernelRepo}/releases/download/${alpineKernelTag}/modloop-lts", modloop)
+        download("https://dl-cdn.alpinelinux.org/alpine/v${alpineVersionBranch}/releases/riscv64/alpine-uboot-${alpineVersion}-riscv64.tar.gz", tarball)
+
+        // Staging dir: Alpine tarball extracted, then our kernel + modloop
+        // overwritten on top. Clean on every run so leftover state from a
+        // previous assembly can't leak through.
+        def stagingDir = new File(alpineBuildDir, 'staging')
+        project.delete(stagingDir)
+        stagingDir.mkdirs()
+
+        exec {
+            workingDir alpineBuildDir
+            commandLine 'tar', '-C', stagingDir.absolutePath, '-xf', tarball.absolutePath
+        }
+        // u-boot/ is Alpine's SPL + U-Boot binary. Our flash chip carries
+        // OpenSBI + U-Boot separately; drop Alpine's copy to save space.
+        project.delete(new File(stagingDir, 'u-boot'))
+
+        project.copy {
+            from(vmlinuz)
+            into new File(stagingDir, 'boot')
+            rename { 'vmlinuz-lts' }
+        }
+        project.copy {
+            from(modloop)
+            into new File(stagingDir, 'boot')
+            rename { 'modloop-lts' }
+        }
+
+        // Patch extlinux.conf's APPEND line. Alpine ships
+        //   modules=loop,squashfs,sd-mod,usb-storage quiet
+        // which hides kernel printk and doesn't route console to our UART
+        // or framebuffer. Our cmdline drops `quiet` and adds:
+        //   console=ttyS0,115200 earlycon=sbi console=tty0
+        // tty0 last so getty respawns on the framebuffer.
+        def extlinuxConf = new File(stagingDir, 'extlinux/extlinux.conf')
+        def patched = extlinuxConf.text.replaceAll(/(?m)^APPEND\s+.*/, "APPEND ${alpineExtlinuxAppend}")
+        extlinuxConf.text = patched
+
+        // First-boot apkovl. Alpine's init-stage-1 globs the boot-media
+        // root for *.apkovl.tar.gz, untars into / on tmpfs, runs
+        // openrc-setup to materialise runlevels, then apk-adds anything
+        // in /etc/apk/world. We pre-seed:
+        //   - /etc/network/interfaces : dhcp eth0 so userspace TAP gets
+        //     a 192.168.0.100 lease on boot (no manual `ip link up`).
+        //   - /etc/apk/repositories   : offline /media repo + online
+        //     main + community so `apk add` works immediately.
+        //   - /etc/runlevels/boot/networking → /etc/init.d/networking
+        //     symlink so OpenRC actually brings the interface up.
+        // Nothing in /etc/apk/world yet — we ship no preinstalled extras
+        // on top of the base image. Users can `apk add` interactively
+        // and `lbu commit` to grow their own apkovl if they want.
+        if (alpineApkovlEnabled) {
+            def apkovlRoot = new File(alpineBuildDir, 'apkovl')
+            project.delete(apkovlRoot)
+            apkovlRoot.mkdirs()
+
+            def writeFile = { relPath, content ->
+                def f = new File(apkovlRoot, relPath)
+                f.parentFile.mkdirs()
+                f.text = content
+            }
+
+            writeFile('etc/network/interfaces', '''\
+auto lo
+iface lo inet loopback
+
+auto eth0
+iface eth0 inet dhcp
+''')
+
+            writeFile('etc/apk/repositories', """\
+/media/nvme0n1p1/apks
+https://dl-cdn.alpinelinux.org/alpine/v${alpineVersionBranch}/main
+https://dl-cdn.alpinelinux.org/alpine/v${alpineVersionBranch}/community
+""")
+
+            // OpenRC runlevel symlink. tar preserves it, init replays it.
+            def runlevelDir = new File(apkovlRoot, 'etc/runlevels/boot')
+            runlevelDir.mkdirs()
+            exec {
+                commandLine 'ln', '-sf', '/etc/init.d/networking',
+                    new File(runlevelDir, 'networking').absolutePath
+            }
+
+            // Marker that tells Alpine's initramfs (`init` script, line
+            // ~916: `if [ -f "$sysroot/etc/.default_boot_services" ...`) to
+            // rc_add the default sysinit/boot services on top of our
+            // hand-rolled apkovl — notably `rc_add modloop sysinit`, which
+            // is what mounts /boot/modloop-lts and populates /lib/modules.
+            //
+            // The path matters. Alpine's init looks for
+            // /etc/.default_boot_services inside the extracted apkovl; if
+            // we write it at the apkovl root (./.default_boot_services) it
+            // lands at /.default_boot_services and the check misses, so
+            // modloop never gets added to sysinit → /lib/modules stays
+            // empty → no r8169.ko → no eth0.
+            writeFile('etc/.default_boot_services', '')
+
+            def apkovlTar = new File(stagingDir, 'localhost.apkovl.tar.gz')
+            exec {
+                workingDir apkovlRoot
+                commandLine 'tar', '--owner=0', '--group=0', '-czf',
+                    apkovlTar.absolutePath, '.'
+            }
+        }
+
+        // Compute image size: content size + headroom + boot-region +
+        // round up to whole MiB for mkfs alignment.
+        long contentBytes = 0
+        stagingDir.eachFileRecurse { f -> if (f.isFile()) contentBytes += f.length() }
+        long contentKb = (long) Math.ceil(contentBytes / 1024.0)
+        long imgKb = ((contentKb * (100 + alpineFsHeadroomPct) / 100 + alpinePartStartKb + 1023)
+                        / 1024 * 1024) as long
+        long fsKb = imgKb - alpinePartStartKb
+        long fsOffsetBytes = (alpinePartStartKb as long) * 1024
+
+        def img = new File(alpineBuildDir, 'alpine_rootfs.img')
+        exec { commandLine 'truncate', '-s', "${imgKb}K", img.absolutePath }
+        exec {
+            // sfdisk reads its partition table description from stdin;
+            // pipe via 'sh -c' since Gradle's exec doesn't have a
+            // standardInput shortcut for string literals.
+            commandLine 'sh', '-c',
+                "echo 'start=2048, type=83, bootable' | sfdisk --quiet ${img.absolutePath}"
+        }
+        exec {
+            commandLine 'mkfs.ext4', '-F', '-q',
+                '-E', "offset=${fsOffsetBytes}",
+                '-L', alpineFsLabel,
+                '-U', alpineFsUuid,
+                '-d', stagingDir.absolutePath,
+                img.absolutePath, "${fsKb}K"
+        }
+
+        destFile.parentFile.mkdirs()
+        destFile.bytes = img.bytes
+        logger.lifecycle("Assembled ${destFile.name} (${destFile.length() / 1024 / 1024} MiB, content ~${contentKb} KiB)")
+    }
+}
+
+processResources.dependsOn 'assembleAlpineImage'
 
 idea {
     module {

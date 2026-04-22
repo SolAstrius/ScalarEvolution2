@@ -6,7 +6,6 @@
 package lekkit.scev.items;
 
 import java.util.List;
-import net.minecraft.ChatFormatting;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
@@ -28,9 +27,8 @@ public class CpuItem extends Item {
 
     @Override
     public void appendHoverText(ItemStack stack, TooltipContext ctx, List<Component> tooltip, TooltipFlag flag) {
-        tooltip.add(Component.translatable("text.scev.cores")
-                .append(Component.literal(": "))
-                .append(Component.literal(Integer.toString(hartCount)).withStyle(ChatFormatting.YELLOW)));
+        ScevTooltips.kv(tooltip, "text.scev.tier", Integer.toString(level));
+        ScevTooltips.kv(tooltip, "text.scev.cores", Integer.toString(hartCount));
         super.appendHoverText(stack, ctx, tooltip, flag);
     }
 }

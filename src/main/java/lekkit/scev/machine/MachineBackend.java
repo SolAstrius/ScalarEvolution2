@@ -75,6 +75,18 @@ public interface MachineBackend extends AutoCloseable {
     @Nullable GpioDevice gpio();
 
     /**
+     * The RPC serial device — a dedicated NS16550A whose chardev is a
+     * JVM-visible ring buffer, exposed to the guest as a second UART
+     * ({@code /dev/ttyS1} once the kernel console claims ttyS0). Used
+     * by {@link lekkit.scev.rpc.ScevRpcManager} to carry COBS-framed
+     * MessagePack RPC traffic.
+     *
+     * <p>Returns {@code null} if the backend is purely simulated (test
+     * fakes) or if the JNI bridge failed to attach.
+     */
+    @Nullable SerialDevice serial();
+
+    /**
      * Direct read/write view into machine physical memory. Returns a mutable
      * {@link java.nio.ByteBuffer} whose backing storage IS the VM's memory —
      * writes are seen by the CPU, reads reflect CPU-written values.

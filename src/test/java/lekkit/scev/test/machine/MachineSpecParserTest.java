@@ -16,7 +16,7 @@ import lekkit.scev.machine.MachineSpec;
 import lekkit.scev.machine.MachineSpecParser;
 import lekkit.scev.machine.firmware.FirmwareRegistry;
 import lekkit.scev.machine.firmware.LinuxFirmware;
-import lekkit.scev.machine.storage.BuildrootDiskTemplate;
+import lekkit.scev.machine.storage.AlpineDiskTemplate;
 import lekkit.scev.machine.storage.DiskTemplateRegistry;
 import lekkit.scev.main.ScevDataComponents;
 import lekkit.scev.main.ScevRegistry;
@@ -362,7 +362,7 @@ class MachineSpecParserTest {
     }
 
     @Test
-    @DisplayName("Preloaded NVMe -> DiskSpec with templateId=scev:buildroot, origin from template")
+    @DisplayName("Preloaded NVMe -> DiskSpec with templateId=scev:alpine, origin from template")
     void preloadedNvmeCarriesTemplateId() {
         // This is the new item behavior. Parser sees a PreloadedNvmeItem in
         // an NVMe slot and emits DiskSpec with templateId set. The backend
@@ -377,12 +377,12 @@ class MachineSpecParserTest {
         assertTrue(d.hasTemplateRef(),
                 "Preloaded NVMe must emit a DiskSpec with templateId set — this is what "
                         + "drives the backend to seed from DiskTemplateRegistry.");
-        assertEquals(DiskTemplateRegistry.BUILDROOT, d.templateId(),
-                "Default template must be DiskTemplateRegistry.BUILDROOT (the shipped ext2 rootfs).");
-        assertEquals(BuildrootDiskTemplate.ASSET_NAME, d.origin(),
+        assertEquals(DiskTemplateRegistry.ALPINE, d.templateId(),
+                "Default template must be DiskTemplateRegistry.ALPINE (the shipped live image).");
+        assertEquals(AlpineDiskTemplate.ASSET_NAME, d.origin(),
                 "origin is populated from the resolved template for legacy code paths that "
                         + "still read origin as a string — consistent with getOrigin() on the item.");
-        assertEquals(BuildrootDiskTemplate.SIZE_MB, d.sizeMb(),
+        assertEquals(AlpineDiskTemplate.SIZE_MB, d.sizeMb(),
                 "sizeMb mirrors the template's declared capacity, not the blank-NVMe default.");
     }
 
@@ -401,7 +401,7 @@ class MachineSpecParserTest {
         MachineSpec.DiskSpec preloaded = spec.nvmeDrives().get(1);
         assertFalse(blank.hasTemplateRef());
         assertTrue(preloaded.hasTemplateRef());
-        assertEquals(DiskTemplateRegistry.BUILDROOT, preloaded.templateId());
+        assertEquals(DiskTemplateRegistry.ALPINE, preloaded.templateId());
         // UUIDs must be distinct — each ItemStack owns its own persistent image.
         assertNotEquals(blank.uuid(), preloaded.uuid());
     }

@@ -8,7 +8,6 @@ package lekkit.scev.items;
 import java.util.List;
 import java.util.UUID;
 import lekkit.scev.main.ScevDataComponents;
-import net.minecraft.ChatFormatting;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
@@ -53,9 +52,15 @@ public class StorageItem extends Item {
     public void appendHoverText(ItemStack stack, TooltipContext ctx, List<Component> tooltip, TooltipFlag flag) {
         long mb = getSizeMb();
         if (mb > 0) {
-            tooltip.add(Component.translatable("text.scev.capacity")
-                    .append(Component.literal(": "))
-                    .append(Component.literal(formatSize(mb)).withStyle(ChatFormatting.YELLOW)));
+            ScevTooltips.kv(tooltip, "text.scev.capacity", formatSize(mb));
+        }
+        // Once STORAGE_UUID is set, the disk has been allocated + (for
+        // preloaded variants) seeded from the template. Show a short id so
+        // players can tell their disks apart in chests / workstations.
+        UUID uuid = getUuid(stack);
+        if (uuid != null) {
+            String shortId = uuid.toString().substring(0, 8);
+            ScevTooltips.kv(tooltip, "text.scev.disk_id", shortId, ScevTooltips.MUTED_VALUE_COLOR);
         }
         super.appendHoverText(stack, ctx, tooltip, flag);
     }

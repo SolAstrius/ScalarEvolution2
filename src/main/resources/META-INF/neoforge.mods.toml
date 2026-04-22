@@ -35,6 +35,17 @@ logoFile="icon.png"
     ordering="NONE"
     side="CLIENT"
 
+# CC: Tweaked — optional CC peripheral integration. ScevCCBootstrap
+# checks ModList before touching any CC classes, so absence is safe.
+# AFTER ordering so CC's PeripheralCapability is registered before our
+# RegisterCapabilitiesEvent listener runs.
+[[dependencies.${mod_id}]]
+    modId="computercraft"
+    type="optional"
+    versionRange="[1.113,)"
+    ordering="AFTER"
+    side="BOTH"
+
 # Mixin config: creative tab section-banner injections live here.
 # Client-side only — banners are pure UI decoration and the server never
 # builds the creative-tab item list.

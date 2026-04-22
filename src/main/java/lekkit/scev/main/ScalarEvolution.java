@@ -9,6 +9,7 @@ import lekkit.scev.client.ScevClient;
 import lekkit.scev.client.render.ScevRenderers;
 import lekkit.scev.network.ScevNetwork;
 import lekkit.scev.server.MachineManager;
+import lekkit.scev.server.StorageManager;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerLevel;
 import net.neoforged.api.distmarker.Dist;
@@ -21,6 +22,7 @@ import net.neoforged.fml.config.ModConfig;
 import net.neoforged.fml.event.lifecycle.FMLClientSetupEvent;
 import net.neoforged.fml.event.lifecycle.FMLCommonSetupEvent;
 import net.neoforged.neoforge.common.NeoForge;
+import net.neoforged.neoforge.event.server.ServerStartingEvent;
 import net.neoforged.neoforge.event.server.ServerStoppingEvent;
 import net.neoforged.neoforge.event.tick.LevelTickEvent;
 
@@ -42,6 +44,11 @@ public final class ScalarEvolution {
         // Common setup (both sides)
         modBus.addListener(ScalarEvolution::onCommonSetup);
 
+        // CC: Tweaked integration — soft-dep; no-op if CC isn't installed.
+        // The bootstrap class carries no CC imports, so classloading it on
+        // a CC-less server doesn't fault.
+        lekkit.scev.compat.cc.ScevCCBootstrap.registerIfPresent();
+
         // Datagen
         modBus.addListener(lekkit.scev.datagen.DataGenerators::onGatherData);
 
@@ -57,12 +64,23 @@ public final class ScalarEvolution {
         container.registerConfig(ModConfig.Type.COMMON, ScevConfig.SPEC);
 
         // Game event bus (not mod bus)
+        // ServerScope wraps the MinecraftServer tick thread as a Kotlin
+        // CoroutineDispatcher + lifecycle-bound CoroutineScope. Per-machine
+        // scopes (ScevRpcManager, future consumers) parent onto this scope
+        // so server stop cancels everything in one hop.
+        NeoForge.EVENT_BUS.addListener(lekkit.scev.common.ServerScope::onServerStarting);
+        NeoForge.EVENT_BUS.addListener(lekkit.scev.common.ServerScope::onServerStopping);
+        NeoForge.EVENT_BUS.addListener(ScalarEvolution::onServerStarting);
         NeoForge.EVENT_BUS.addListener(ScalarEvolution::onServerStopping);
         // SoundStreamManager.onServerTick dispatches queued PCM frames to
         // nearby players every server tick. Registering by method reference
         // against the explicit event type bypasses @SubscribeEvent scanning —
         // the method is static and self-contained.
         NeoForge.EVENT_BUS.addListener(lekkit.scev.server.SoundStreamManager::onServerTick);
+        // ScevRpcManager.onServerTick drains every live machine's RPC UART,
+        // decodes frames, dispatches to the registered handlers, and pushes
+        // responses back toward the guest.
+        NeoForge.EVENT_BUS.addListener(lekkit.scev.rpc.ScevRpcManager::onServerTick);
     }
 
     private static void onCommonSetup(FMLCommonSetupEvent event) {
@@ -76,7 +94,14 @@ public final class ScalarEvolution {
         lekkit.scev.machine.storage.DiskTemplateRegistry.registerBuiltins();
     }
 
+    private static void onServerStarting(ServerStartingEvent event) {
+        // Rebind NVMe / snapshot storage into the active world's save folder
+        // so disk contents travel with the world (backup, copy, delete).
+        StorageManager.onServerStarting(event.getServer());
+    }
+
     private static void onServerStopping(ServerStoppingEvent event) {
         MachineManager.finishAllMachines();
+        StorageManager.onServerStopping();
     }
 }

@@ -5,6 +5,11 @@ src/generated/
 out/
 classes/
 
+# OpenH264 ships its platform Makefiles in vendor/openh264/build/ — keep
+# that tracked despite the global `build/` rule above.
+!vendor/openh264/build/
+!vendor/openh264/build/**
+
 # IDE
 .idea/
 *.iml
@@ -50,3 +55,27 @@ docs/
 # Dev-only audio test material
 *.mp3
 *.wav
+src/main/resources/assets/scev/firmware/alpine_rootfs.img
+
+# Built natives — produced fresh by CI per platform and dropped into the
+# classifier dirs. Never committed.
+src/main/resources/natives/*/librvvm.so
+src/main/resources/natives/*/librvvm.dylib
+src/main/resources/natives/*/rvvm.dll
+src/main/resources/natives/*/libscev_h264.so
+src/main/resources/natives/*/libscev_h264.dylib
+src/main/resources/natives/*/scev_h264.dll
+
+# OpenH264 + JNI wrapper build intermediates. We vendor the OpenH264 source
+# under vendor/openh264/ and build it in-place via its own Makefile; the
+# build writes .o/.d/.a next to each source file. Keep the vendor tree
+# clean of those outputs.
+vendor/openh264/**/*.o
+vendor/openh264/**/*.d
+vendor/openh264/libopenh264.a
+vendor/openh264/libopenh264.so*
+vendor/openh264/libopenh264.dylib
+native/openh264-jni/*.o
+native/openh264-jni/*.d
+native/openh264-jni/libscev_h264.*
+native/openh264-jni/scev_h264.dll

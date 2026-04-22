@@ -130,6 +130,9 @@ public abstract class DirectionalBlock extends BaseEntityBlock {
             }
         }
         sbe.onRedstoneInput(signals);
+        // Peripheral-bus hook: let machine BEs know a neighbour changed so
+        // they can rescan their bus. Cheap no-op on non-machine BEs.
+        sbe.onNeighborBlockChanged(fromPos);
     }
 
     /* --------------------------- Ticking --------------------------- */

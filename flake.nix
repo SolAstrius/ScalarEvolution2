@@ -42,7 +42,20 @@
       in
       {
         devShells.default = pkgs.mkShell {
-          packages = [ jdk ];
+          # `jdk` below resolves to the let-bound `jdk = pkgs.jdk21`; the
+          # other names come from `with pkgs;`. Native toolchain for the
+          # bundled C/C++ code:
+          #   - librvvm      : RVVM (vendored build from submodule ref)
+          #   - libscev_h264 : JNI wrapper + statically-linked OpenH264
+          # `zig cc` / `zig c++` doubles as a cross-toolchain so a single
+          # package covers linux/macos/windows targets if/when local
+          # cross-builds are needed. `gnumake` drives OpenH264's in-tree
+          # Makefile and our JNI wrapper Makefile.
+          packages = with pkgs; [
+            jdk
+            zig
+            gnumake
+          ];
 
           shellHook = ''
             export JAVA_HOME=${jdk}/lib/openjdk

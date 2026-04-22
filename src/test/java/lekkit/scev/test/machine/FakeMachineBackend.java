@@ -44,6 +44,7 @@ public final class FakeMachineBackend implements MachineBackend {
     private @Nullable FakeKeyboard keyboard;
     private @Nullable FakeMouse mouse;
     private @Nullable FakeGpio gpio;
+    private @Nullable FakeSerial serial;
     private boolean initialized;
     private boolean closed;
     private boolean running;
@@ -72,6 +73,10 @@ public final class FakeMachineBackend implements MachineBackend {
         if (spec.hasGpio()) {
             this.gpio = new FakeGpio();
         }
+        // Always provide a serial device so RPC tests can drive it without
+        // depending on any spec bit. Production gates on spec.hasRpc() if
+        // we ever add that knob; for now everyone gets a UART.
+        this.serial = new FakeSerial();
         initialized = true;
         lifecycleOps.add("initialize");
         return true;
@@ -117,6 +122,7 @@ public final class FakeMachineBackend implements MachineBackend {
     @Override public @Nullable KeyboardDevice keyboard()    { return closed ? null : keyboard; }
     @Override public @Nullable MouseDevice mouse()          { return closed ? null : mouse; }
     @Override public @Nullable GpioDevice gpio()            { return closed ? null : gpio; }
+    @Override public @Nullable lekkit.scev.machine.SerialDevice serial() { return closed ? null : serial; }
 
     /**
      * Fake DMA: returns a ByteBuffer view over a per-backend map of memory
@@ -153,6 +159,7 @@ public final class FakeMachineBackend implements MachineBackend {
     public @Nullable FakeKeyboard keyboardRaw() { return keyboard; }
     public @Nullable FakeMouse mouseRaw() { return mouse; }
     public @Nullable FakeGpio gpioRaw() { return gpio; }
+    public @Nullable FakeSerial serialRaw() { return serial; }
 
     public static final class FakeFramebuffer implements FramebufferView {
         private final int w, h;
@@ -210,5 +217,42 @@ public final class FakeMachineBackend implements MachineBackend {
 
         @Override public int readPins() { return readValue & 0x3F; }
         @Override public void writePins(int pins) { lastWrite = pins & 0x3F; writes.add(lastWrite); }
+    }
+
+    /**
+     * In-memory {@link lekkit.scev.machine.SerialDevice}. TX bytes written
+     * by "the guest" (via {@link #produceTx}) are handed back through
+     * {@link #pollTx}; RX bytes fed via {@link #feedRx} are observable
+     * via {@link #consumeRx}. No ordering guarantees across threads
+     * needed — tests drive these serially.
+     */
+    public static final class FakeSerial implements lekkit.scev.machine.SerialDevice {
+        private final java.util.ArrayDeque<Byte> tx = new java.util.ArrayDeque<>();
+        private final java.util.ArrayDeque<Byte> rx = new java.util.ArrayDeque<>();
+
+        /** Enqueue bytes "the guest would emit" so the next pollTx can see them. */
+        public synchronized void produceTx(byte[] bytes) {
+            for (byte b : bytes) tx.add(b);
+        }
+
+        /** Drain everything the RPC layer fed us as "toward the guest". */
+        public synchronized byte[] consumeRx() {
+            byte[] out = new byte[rx.size()];
+            for (int i = 0; i < out.length; i++) out[i] = rx.poll();
+            return out;
+        }
+
+        @Override
+        public synchronized int pollTx(byte[] buf) {
+            int n = Math.min(buf.length, tx.size());
+            for (int i = 0; i < n; i++) buf[i] = tx.poll();
+            return n;
+        }
+
+        @Override
+        public synchronized int feedRx(byte[] buf) {
+            for (byte b : buf) rx.add(b);
+            return buf.length;
+        }
     }
 }

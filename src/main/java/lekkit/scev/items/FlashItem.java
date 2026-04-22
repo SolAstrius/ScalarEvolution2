@@ -7,7 +7,6 @@ package lekkit.scev.items;
 
 import java.util.List;
 import lekkit.scev.main.ScevDataComponents;
-import net.minecraft.ChatFormatting;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.item.ItemStack;
@@ -32,11 +31,7 @@ public class FlashItem extends StorageItem {
     @Override
     public void appendHoverText(ItemStack stack, TooltipContext ctx, List<Component> tooltip, TooltipFlag flag) {
         super.appendHoverText(stack, ctx, tooltip, flag);
-
-        Component firmwareLabel = describeFirmware(stack);
-        tooltip.add(Component.translatable("text.scev.firmware")
-                .append(Component.literal(": "))
-                .append(firmwareLabel.copy().withStyle(ChatFormatting.YELLOW)));
+        ScevTooltips.kv(tooltip, "text.scev.firmware", describeFirmware(stack));
     }
 
     /**

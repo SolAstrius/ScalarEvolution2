@@ -103,6 +103,16 @@ public abstract class ScevBlockEntity extends BlockEntity {
     }
 
     /**
+     * Called from the block's {@code neighborChanged} path so machine BEs
+     * can invalidate their peripheral-bus scan. Default is a no-op —
+     * blocks that own a bus controller override this to call
+     * {@code peripheralBus.invalidate()}.
+     */
+    public void onNeighborBlockChanged(BlockPos fromPos) {
+        // Override in subclass
+    }
+
+    /**
      * Server-side tick hook. Subclasses with running machines forward GPIO
      * state back out to redstone. Block entities register this as their ticker
      * via {@link net.minecraft.world.level.block.EntityBlock#getTicker}.

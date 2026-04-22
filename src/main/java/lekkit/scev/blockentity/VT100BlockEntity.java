@@ -5,7 +5,10 @@
  */
 package lekkit.scev.blockentity;
 
+import java.util.Set;
 import java.util.UUID;
+import lekkit.scev.bus.PeripheralBusElement;
+import lekkit.scev.bus.PeripheralDeviceKind;
 import lekkit.scev.main.ScevRegistry;
 import lekkit.scev.server.MachineManager;
 import lekkit.scev.server.MachineState;
@@ -25,11 +28,20 @@ import org.jetbrains.annotations.Nullable;
  * don't re-scan. The cache invalidates when the linked machine stops or
  * goes out of range.
  */
-public class VT100BlockEntity extends ScevBlockEntity {
+public class VT100BlockEntity extends ScevBlockEntity implements PeripheralBusElement {
     /** Cubic radius around the VT100 to search for machines (manhattan distance in blocks). */
     private static final int LINK_RADIUS = 6;
 
     private @Nullable UUID linkedMachineUuid;
+
+    /**
+     * Bus-bound machine UUID. Stamped by a {@link lekkit.scev.bus.PeripheralBusController}
+     * when the VT100 is on a scanned bus. Takes precedence over the legacy
+     * cube-scan in {@link #resolveLinkedMachine} — cable connection beats
+     * proximity because it's an explicit player choice.
+     */
+    private @Nullable UUID boundMachineUuid;
+    private @Nullable BlockPos boundMachinePos;
 
     public VT100BlockEntity(BlockPos pos, BlockState state) {
         super(ScevRegistry.VT100_BE.get(), pos, state);
@@ -41,6 +53,16 @@ public class VT100BlockEntity extends ScevBlockEntity {
      * which gets synced through {@link #getUpdateTag}.
      */
     public @Nullable UUID resolveLinkedMachine() {
+        // Bus-bound wins: a cable-connected VT100 follows the explicit
+        // player wire, not whichever machine happens to be nearest.
+        if (boundMachineUuid != null) {
+            MachineState ms = MachineManager.getMachineState(boundMachineUuid);
+            if (ms != null && ms.getDisplay() != null) {
+                linkedMachineUuid = boundMachineUuid;
+                return boundMachineUuid;
+            }
+        }
+
         if (linkedMachineUuid != null) {
             MachineState ms = MachineManager.getMachineState(linkedMachineUuid);
             if (ms != null && ms.getDisplay() != null) return linkedMachineUuid;
@@ -79,6 +101,23 @@ public class VT100BlockEntity extends ScevBlockEntity {
     public @Nullable UUID getLinkedMachineUuid() {
         return linkedMachineUuid;
     }
+
+    @Override
+    public Set<PeripheralDeviceKind> peripheralKinds() {
+        return Set.of(PeripheralDeviceKind.DISPLAY);
+    }
+
+    @Override
+    public @Nullable UUID boundMachineUuid() { return boundMachineUuid; }
+
+    @Override
+    public void setBoundMachineUuid(@Nullable UUID uuid) { this.boundMachineUuid = uuid; }
+
+    @Override
+    public @Nullable BlockPos boundMachinePos() { return boundMachinePos; }
+
+    @Override
+    public void setBoundMachinePos(@Nullable BlockPos pos) { this.boundMachinePos = pos; }
 
     @Override
     protected void loadAdditional(CompoundTag tag, HolderLookup.Provider registries) {

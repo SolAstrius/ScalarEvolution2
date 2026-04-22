@@ -201,6 +201,9 @@ public final class MachineSpecParser {
         // for the new assertion shape.
         if (hasFlashChip && flashStack.getItem() instanceof FlashItem flashItem) {
             UUID flashUuid = flashItem.ensureUuid(flashStack);
+            // Persist the UUID back into the motherboard's stored stack
+            // (flashStack is a snapshot-copy, same lifecycle as NVMe below).
+            mbInv.setItem(MotherboardItem.SLOT_FLASH, flashStack);
             builder.firmware(new MachineSpec.FirmwareSpec(
                     flashUuid, flashItem.getSizeMb(),
                     /* origin */ null,
@@ -220,9 +223,16 @@ public final class MachineSpecParser {
             if (!(s.getItem() instanceof NvmeItem)) continue;
             if (!(s.getItem() instanceof StorageItem storageItem)) continue;
             UUID diskUuid = storageItem.ensureUuid(s);
+            // ensureUuid mutated the stack `s` in place, but `s` is a copy
+            // from mbInv.snapshot() — the motherboard's data component
+            // still holds the unmutated stack. Write back so the UUID is
+            // persisted on the item (and surfaces in its tooltip).
+            mbInv.setItem(i, s);
             ResourceLocation templateId = null;
             if (s.getItem() instanceof PreloadedNvmeItem preloaded) {
-                templateId = preloaded.getDefaultTemplateId();
+                // Stack-aware: picks up DISK_TEMPLATE component overrides
+                // (each creative-tab variant sets this to a different id).
+                templateId = preloaded.getTemplateId(s);
             }
             builder.nvme(new MachineSpec.DiskSpec(
                     diskUuid, storageItem.getSizeMb(),

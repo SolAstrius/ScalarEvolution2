@@ -7,6 +7,8 @@ package lekkit.scev.blockentity;
 
 import java.util.UUID;
 import lekkit.scev.blocks.DirectionalBlock;
+import lekkit.scev.bus.PeripheralBus;
+import lekkit.scev.bus.PeripheralBusController;
 import lekkit.scev.items.FlashItem;
 import lekkit.scev.items.MotherboardItem;
 import lekkit.scev.items.SocItem;
@@ -62,6 +64,9 @@ public class McuBoardBlockEntity extends ScevBlockEntity implements IMachineHand
 
     /** Incremented every serverTick, used for diagnostics / future animation. */
     protected int tickCount;
+
+    /** Peripheral bus controller. Lazily created on first server tick. */
+    protected @org.jetbrains.annotations.Nullable PeripheralBusController peripheralBus;
 
     public McuBoardBlockEntity(BlockPos pos, BlockState state) {
         super(ScevRegistry.MCU_BOARD_BE.get(), pos, state);
@@ -124,6 +129,21 @@ public class McuBoardBlockEntity extends ScevBlockEntity implements IMachineHand
     @Override
     public int getMaxMotherboardLevel() { return 0; }
 
+    public @org.jetbrains.annotations.Nullable PeripheralBus peripheralBus() {
+        return peripheralBus != null ? peripheralBus.getBus() : null;
+    }
+
+    @Override
+    public void onNeighborBlockChanged(BlockPos fromPos) {
+        if (peripheralBus != null) peripheralBus.invalidate();
+    }
+
+    @Override
+    public void setRemoved() {
+        super.setRemoved();
+        if (peripheralBus != null) peripheralBus.dispose();
+    }
+
     /* ---------------- Redstone / GPIO ---------------- */
 
     /**
@@ -157,6 +177,12 @@ public class McuBoardBlockEntity extends ScevBlockEntity implements IMachineHand
     @Override
     public void serverTick(Level level, BlockPos pos, BlockState state) {
         if (level.isClientSide) return;
+
+        if (peripheralBus == null) {
+            peripheralBus = new PeripheralBusController(level, pos, getMachineUUID());
+        }
+        peripheralBus.tick();
+
         MachineState machineState = MachineManager.getMachineState(getMachineUUID());
         if (machineState == null) return;
         tickCount++;
@@ -192,6 +218,10 @@ public class McuBoardBlockEntity extends ScevBlockEntity implements IMachineHand
         ItemStack flash = items.get(SLOT_FLASH);
         MachineSpec spec = MachineSpecParser.fromMcu(getMachineUUID(), soc, flash);
         if (spec == null) return null;
+        // Parser may have mutated flash (STORAGE_UUID allocation); flag
+        // the BE dirty so NBT save captures the new component. Matches
+        // ComputerCaseBlockEntity.buildMachine().
+        setChanged();
         return MachineManager.createMachineState(spec);
     }
 

@@ -6,7 +6,6 @@
 package lekkit.scev.items;
 
 import java.util.List;
-import net.minecraft.ChatFormatting;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
@@ -63,15 +62,10 @@ public class SocItem extends Item {
 
     @Override
     public void appendHoverText(ItemStack stack, TooltipContext ctx, List<Component> tooltip, TooltipFlag flag) {
-        tooltip.add(Component.translatable("text.scev.cores")
-                .append(Component.literal(": "))
-                .append(Component.literal(Integer.toString(hartCount)).withStyle(ChatFormatting.YELLOW)));
-        tooltip.add(Component.translatable("text.scev.isa")
-                .append(Component.literal(": "))
-                .append(Component.literal(isa).withStyle(ChatFormatting.YELLOW)));
-        tooltip.add(Component.translatable("text.scev.embedded_ram")
-                .append(Component.literal(": "))
-                .append(Component.literal(formatRam(embeddedRamKib)).withStyle(ChatFormatting.YELLOW)));
+        ScevTooltips.kv(tooltip, "text.scev.tier", Integer.toString(tier));
+        ScevTooltips.kv(tooltip, "text.scev.cores", Integer.toString(hartCount));
+        ScevTooltips.kv(tooltip, "text.scev.isa", isa);
+        ScevTooltips.kv(tooltip, "text.scev.embedded_ram", formatRam(embeddedRamKib));
         super.appendHoverText(stack, ctx, tooltip, flag);
     }
 

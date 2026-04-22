@@ -7,7 +7,10 @@ package lekkit.scev.items;
 
 import lekkit.scev.machine.storage.DiskTemplateRegistry;
 import lekkit.scev.machine.storage.ScevDiskTemplate;
+import lekkit.scev.main.ScevDataComponents;
+import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
+import net.minecraft.world.item.ItemStack;
 import org.jetbrains.annotations.Nullable;
 
 /**
@@ -71,12 +74,23 @@ public class PreloadedNvmeItem extends NvmeItem {
     }
 
     /**
-     * Template registry id for this item. Parser reads this and attaches
-     * it to the emitted {@code DiskSpec} so the backend uses the right
-     * template.
+     * Template registry id this item type defaults to (ctor-provided).
+     * Prefer {@link #getTemplateId(ItemStack)} when a stack is available —
+     * that picks up per-stack overrides.
      */
     public ResourceLocation getDefaultTemplateId() {
         return defaultTemplateId;
+    }
+
+    /**
+     * Per-stack template id: data component wins, falls back to the ctor
+     * default. Lets a single registered item surface multiple template
+     * variants in the creative tab (one stack per registered template,
+     * {@link ScevDataComponents#DISK_TEMPLATE} differentiating them).
+     */
+    public ResourceLocation getTemplateId(ItemStack stack) {
+        ResourceLocation override = stack.get(ScevDataComponents.DISK_TEMPLATE.get());
+        return override != null ? override : defaultTemplateId;
     }
 
     /**
@@ -100,5 +114,43 @@ public class PreloadedNvmeItem extends NvmeItem {
     public long getSizeMb() {
         ScevDiskTemplate template = DiskTemplateRegistry.get(defaultTemplateId);
         return template != null ? template.sizeMb() : super.getSizeMb();
+    }
+
+    /**
+     * Display name — derived from the template so "NVMe Drive" gets the
+     * right distro suffix ({@code "(Alpine Linux)"}, {@code "(Buildroot
+     * Linux)"}, etc.) without needing a new lang key per template.
+     *
+     * <p>Lang key is still {@code item.scev.nvme_preloaded} for the base
+     * string; the template's {@code displayName()} is appended in
+     * parentheses. Falls back to the lang default if the template isn't
+     * registered (shouldn't happen post-init).
+     */
+    /**
+     * Display name.
+     *
+     * <p>Fresh stack (no {@code STORAGE_UUID} yet → template not applied):
+     * {@code "NVMe Drive (Alpine Linux)"} — the template suffix advertises
+     * what the disk will be seeded with on first install.
+     *
+     * <p>Materialized stack ({@code STORAGE_UUID} set → bytes on disk):
+     * {@code "NVMe Drive"} — the disk is no longer "preloaded", it's
+     * whatever the guest has written to it since, with an identity of its
+     * own. The UUID is surfaced in the tooltip by {@link StorageItem}.
+     */
+    @Override
+    public Component getName(ItemStack stack) {
+        Component base = Component.translatable(this.getDescriptionId(stack));
+        if (getUuid(stack) != null) {
+            // Already allocated + seeded; template is historical.
+            return base;
+        }
+        ScevDiskTemplate template = DiskTemplateRegistry.get(getTemplateId(stack));
+        if (template == null) return base;
+        return Component.empty()
+                .append(base)
+                .append(Component.literal(" ("))
+                .append(template.displayName())
+                .append(Component.literal(")"));
     }
 }

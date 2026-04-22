@@ -6,12 +6,14 @@
 package lekkit.scev.server;
 
 import java.util.UUID;
+import lekkit.scev.common.MachineClock;
 import lekkit.scev.machine.FramebufferView;
 import lekkit.scev.machine.GpioDevice;
 import lekkit.scev.machine.KeyboardDevice;
 import lekkit.scev.machine.MachineBackend;
 import lekkit.scev.machine.MachineSpec;
 import lekkit.scev.machine.MouseDevice;
+import lekkit.scev.machine.SerialDevice;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
 import org.jetbrains.annotations.Nullable;
@@ -31,6 +33,15 @@ import org.jetbrains.annotations.Nullable;
 public class MachineState {
     private final MachineSpec spec;
     private final MachineBackend backend;
+
+    /**
+     * Per-machine A/V sync clock. Stamps audio + video frames with
+     * presentation timestamps so the client can render them against a
+     * common media clock. Reset on {@link #pause()} / {@link #unload()}
+     * so the stream's timeline restarts cleanly; the next emitted frame
+     * re-anchors the origin.
+     */
+    private final MachineClock clock = new MachineClock(MachineClock.DEFAULT_SAMPLE_RATE_HZ);
 
     private boolean paused;
     private boolean unloaded;
@@ -53,6 +64,7 @@ public class MachineState {
     public UUID getUUID() { return spec.uuid(); }
     public MachineSpec getSpec() { return spec; }
     public MachineBackend getBackend() { return backend; }
+    public MachineClock getClock() { return clock; }
 
     public void setPersisting(boolean p) { persisting = p; }
     public boolean isPersisting() { return persisting; }
@@ -79,11 +91,22 @@ public class MachineState {
     public @Nullable KeyboardDevice getKeyboard() { return backend.keyboard(); }
     public @Nullable MouseDevice getMouse() { return backend.mouse(); }
     public @Nullable GpioDevice getGPIO() { return backend.gpio(); }
+    public @Nullable SerialDevice getSerial() { return backend.serial(); }
 
     /* ---------------- Lifecycle ---------------- */
 
     public boolean start() { return backend.start(); }
-    public boolean reset() { return backend.reset(); }
+
+    /**
+     * Power-cycle the emulated hardware. Also resets the A/V sync
+     * clock so the post-reset audio/video stream starts a new epoch —
+     * the client's MediaClock detects the backward PTS jump and
+     * re-anchors.
+     */
+    public boolean reset() {
+        clock.reset();
+        return backend.reset();
+    }
     public boolean isPowered() { return backend.isRunning(); }
     public boolean isValid() { return backend.isValid(); }
 
@@ -95,6 +118,12 @@ public class MachineState {
         if (!unloaded && backend.isValid()) {
             unloaded = true;
             backend.pause();
+            // Halting frame emission freezes the audio sample counter
+            // but wall-clock keeps going; without a reset, video PTS
+            // on resume would jump forward by the pause duration and
+            // desync from audio. Reset both so the resume frame
+            // re-anchors the client's MediaClock cleanly.
+            clock.reset();
         }
     }
 
@@ -110,6 +139,10 @@ public class MachineState {
         if (!paused && backend.isValid()) {
             paused = true;
             backend.pause();
+            // Same reasoning as unload(): keep audio/video PTS in
+            // step with each other across the pause boundary by
+            // dropping the shared clock origin.
+            clock.reset();
         }
     }
 
