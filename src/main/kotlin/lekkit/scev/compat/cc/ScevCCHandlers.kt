@@ -7,12 +7,14 @@ package lekkit.scev.compat.cc
 
 import dan200.computercraft.api.lua.LuaException
 import dan200.computercraft.api.lua.ObjectArguments
+import dan200.computercraft.api.peripheral.IComputerAccess
 import dan200.computercraft.api.peripheral.IPeripheral
 import kotlinx.coroutines.sync.withLock
 import lekkit.scev.rpc.MsgValue
 import lekkit.scev.rpc.RpcDispatcher
 import lekkit.scev.rpc.RpcHandler
 import lekkit.scev.rpc.RpcProtocol
+import java.lang.reflect.Field
 
 /**
  * RPC handlers backed by a [ScevCCComputer].
@@ -128,6 +130,11 @@ internal object ScevCCHandlers {
             // whole list — just emit an empty types array.
         }
         entry[MsgValue.of("types")] = MsgValue.ofArray(typesList)
+        // If we can reach through the modem wrapper, surface the real
+        // implementing class — same breadcrumb we emit for direct peers.
+        underlyingRemotePeripheral(ref.modem, computer, ref.remoteName)?.let { p ->
+            entry[MsgValue.of("class")] = MsgValue.of(p::class.java.name)
+        }
         return MsgValue.ofMap(entry)
     }
 
@@ -320,7 +327,7 @@ internal object ScevCCHandlers {
             ?: throw RpcHandler.RpcException("no such peripheral: $target")
         return when (ref) {
             is ScevCCComputer.PeripheralRef.Direct -> describeDirect(target, ref.peripheral, args)
-            is ScevCCComputer.PeripheralRef.Remote -> describeRemote(computer, ref)
+            is ScevCCComputer.PeripheralRef.Remote -> describeRemote(computer, ref, args)
         }
     }
 
@@ -364,11 +371,22 @@ internal object ScevCCHandlers {
     private suspend fun describeRemote(
         computer: ScevCCComputer,
         ref: ScevCCComputer.PeripheralRef.Remote,
+        args: List<MsgValue>,
     ): MsgValue {
-        // We can enumerate names via the modem's getMethodsRemote, but
-        // we don't have signature reflection — the remote's class is
-        // hidden behind the modem wrapper. Mark as dynamic so the guest
-        // can fall back to the "bad-arg probe" trick.
+        // Wired modems attach each remote peripheral to our IComputerAccess
+        // by stashing the actual IPeripheral in a private wrapper map.
+        // Reach through that wrapper so we can run the same reflection-
+        // based introspection as for direct-side peripherals — the real
+        // @LuaFunction methods are right there once we have the instance.
+        val underlying = underlyingRemotePeripheral(ref.modem, computer, ref.remoteName)
+        if (underlying != null) {
+            return describeDirect(ref.remoteName, underlying, args)
+        }
+
+        // Wrapper-reflection miss (CC internals changed, or the wrapper
+        // hasn't been set up yet). Fall back to the method-name list from
+        // getMethodsRemote and mark the response `dynamic` so the guest
+        // can use the bad-arg probe trick instead of real signatures.
         val ctx = ScevLuaContext()
         val arguments = ObjectArguments(ref.remoteName)
         val result = try {
@@ -392,6 +410,75 @@ internal object ScevCCHandlers {
         out[MsgValue.of("methods")] = MsgValue.ofArray(names.map { MsgValue.of(it) })
         return MsgValue.ofMap(out)
     }
+
+    /**
+     * Pull the actual `IPeripheral` behind a wired-modem remote name,
+     * or `null` if we can't reach it.
+     *
+     * CC's `WiredModemPeripheral` keeps a private
+     * `Map<IComputerAccess, Map<String, RemotePeripheralWrapper>>` —
+     * one wrapper per (computer, remote-name) pair, populated during
+     * `attach(computer)`. Each wrapper holds a private `peripheral`
+     * field pointing at the real peripheral. We reflect in to surface
+     * it so introspection (`describe` / `type` / class name) matches
+     * what the guest gets for direct-side neighbours.
+     *
+     * Best-effort: any reflection failure returns null so callers fall
+     * back to modem-RPC-only paths. CC internals can rename these
+     * fields between versions — the cache invalidates automatically
+     * because we walk up the class hierarchy each time we miss.
+     */
+    internal fun underlyingRemotePeripheral(
+        modem: IPeripheral,
+        computer: IComputerAccess,
+        name: String,
+    ): IPeripheral? = try {
+        val wrappersField = wrappersFieldFor(modem.javaClass)
+        @Suppress("UNCHECKED_CAST")
+        val byComputer = wrappersField?.get(modem) as? Map<Any?, Any?>
+        val inner = byComputer?.get(computer) as? Map<*, *>
+        val wrapper = inner?.get(name)
+        if (wrapper == null) null else wrapperPeripheralField(wrapper.javaClass)?.get(wrapper) as? IPeripheral
+    } catch (_: Throwable) {
+        null
+    }
+
+    /**
+     * Walk up a modem class's hierarchy looking for the private
+     * `peripheralWrappers` field. Cached per concrete modem class
+     * (including misses, via an Optional) because reflection lookups
+     * on a modded-mod's peripheral chain aren't free to repeat.
+     */
+    private val wrappersFieldCache =
+        java.util.concurrent.ConcurrentHashMap<Class<*>, java.util.Optional<Field>>()
+
+    private fun wrappersFieldFor(modemCls: Class<*>): Field? =
+        wrappersFieldCache.computeIfAbsent(modemCls) { cls ->
+            var c: Class<*>? = cls
+            while (c != null) {
+                try {
+                    val f = c.getDeclaredField("peripheralWrappers")
+                    f.isAccessible = true
+                    return@computeIfAbsent java.util.Optional.of(f)
+                } catch (_: NoSuchFieldException) {}
+                c = c.superclass
+            }
+            java.util.Optional.empty()
+        }.orElse(null)
+
+    private val wrapperPeripheralFieldCache =
+        java.util.concurrent.ConcurrentHashMap<Class<*>, java.util.Optional<Field>>()
+
+    private fun wrapperPeripheralField(wrapperCls: Class<*>): Field? =
+        wrapperPeripheralFieldCache.computeIfAbsent(wrapperCls) { cls ->
+            try {
+                val f = cls.getDeclaredField("peripheral")
+                f.isAccessible = true
+                java.util.Optional.of(f)
+            } catch (_: NoSuchFieldException) {
+                java.util.Optional.empty()
+            }
+        }.orElse(null)
 
     private fun signatureMsg(sig: ScevPeripheralMethods.MethodSignature): MsgValue {
         val m = linkedMapOf<MsgValue, MsgValue>()
@@ -492,6 +579,9 @@ internal object ScevCCHandlers {
                 out[MsgValue.of("type")] = if (types.isNotEmpty()) MsgValue.of(types[0]) else MsgValue.NIL
                 out[MsgValue.of("types")] = MsgValue.ofArray(types.map { MsgValue.of(it) })
                 out[MsgValue.of("remote")] = MsgValue.of(true)
+                underlyingRemotePeripheral(ref.modem, computer, ref.remoteName)?.let { p ->
+                    out[MsgValue.of("class")] = MsgValue.of(p::class.java.name)
+                }
             }
         }
         return MsgValue.ofMap(out)

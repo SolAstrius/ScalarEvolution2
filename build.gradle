@@ -566,137 +566,95 @@ tasks.register('buildH264Native') {
 processResources.dependsOn 'buildH264Native'
 
 // --------------------------------------------------------------------
-// Alpine preloaded-NVMe image — SYS-INSTALL produced by scev-alpine
+// Alpine preloaded-NVMe image — fetched from scev-alpine's CI release
 // --------------------------------------------------------------------
-// Historical context: the previous revision of this task assembled a
-// LIVE-mode Alpine image in-place — extract alpine-uboot tarball, swap
-// in a scev-patched kernel, wrap an apkovl with an auto-commit daemon
-// that tar'd /etc /root /home /var/log into the boot partition every
-// few seconds to fake persistence. That was a hack: pid 1 still ran
-// from tmpfs, every guest write still hit RAM, and "persistence" was a
-// snapshot loop that lost the last N seconds on every hard-poweroff.
-// It shipped next to Buildroot (which did real pid-1-on-disk pivot)
-// and made the mod's disk-persistence story asymmetric.
+// scev-alpine's GitHub Actions workflow rebuilds the sys-install image
+// on every push to its main branch and on a weekly cron. Each run
+// overwrites the rolling `latest` release tag with fresh artefacts —
+// see https://github.com/SolAstrius/scev-alpine/releases/tag/latest.
+// We just download the .img.zst from there, decompress it, and drop
+// it in resources. No Docker, no kernel cross-build on the mod side.
 //
-// The new task delegates to the scev-alpine project's `make sysinstall`
-// pipeline (tools/build-nvme-sysinstall.sh over there), which:
-//   1. Cross-compiles the scev-patched linux-lts kernel with NVMe + ext4
-//      built-in (so the kernel can mount its own root from cmdline,
-//      no initramfs required).
-//   2. Bootstraps a real Alpine userspace into a staging dir via
-//      apk.static --root <stage> --arch riscv64 add alpine-base …
-//   3. Drops the kernel into /boot, writes /extlinux/extlinux.conf with
-//      root=/dev/nvme0n1p1, configures /etc/fstab, /etc/hostname,
-//      OpenRC runlevels, and networking.
-//   4. mkfs.ext4 over the whole rootfs into an MBR-wrapped partition.
+// Why we don't build it here: the kernel cross-compile is a 30-minute
+// job even with ccache hot. scev-alpine pays that cost once per push
+// in CI and ships the result; mod consumers should pay zero seconds.
+// Older revisions of this task did Docker + sibling clone; cut for
+// the obvious reason (45 min cold first build is hostile).
 //
-// Result: an NVMe image where `touch /root/foo; reboot; ls /root/foo`
-// actually works — every write goes directly to the on-disk ext4, no
-// snapshots, no daemons, journal replay on hard-cut. Same architectural
-// shape as Buildroot's pivot, just with the work front-loaded at image
-// assembly instead of at guest boot.
+// Pinning: alpineRel tracks scev-alpine's `ALPINE_REL` (the exact
+// Alpine point release the upstream's `latest-releases.yaml` resolves
+// to at build time). Bump when scev-alpine moves to a new point
+// release — the asset filename in the release embeds the version, so
+// a stale pin would 404. The `latest` tag itself stays stable.
 //
-// Local build: requires Docker + a clone of github.com/SolAstrius/scev-alpine
-// at one of:
-//   - ${rootDir}/../scev-alpine   (sibling clone — dev convention)
-//   - $SCEV_ALPINE_REPO           (env override)
-// If neither is present, the task clones it into ${buildDir}/scev-alpine.
-// First-time build: ~45 min (cross-toolchain + kernel). Incremental: <1 min.
+// Offline / air-gapped builds: drop the .img.zst into
+// ${buildDir}/alpine/ manually before invoking Gradle. The task
+// short-circuits the curl when the archive is already present.
 ext.alpineVersion = '3.23'
-ext.scevAlpineRepoUrl = 'https://github.com/SolAstrius/scev-alpine.git'
+ext.alpineRel = '3.23.4'
+ext.scevAlpineRepo = 'SolAstrius/scev-alpine'
+ext.scevAlpineReleaseTag = 'latest'
 
-tasks.register('assembleAlpineImage') {
+tasks.register('fetchAlpineImage') {
     group = 'native'
-    description = "Build (or reuse) scev-alpine's sys-install NVMe image and install it into resources"
+    description = "Download scev-alpine's sys-install NVMe image from the rolling 'latest' release"
 
+    def assetName = "alpine-scev-sysinstall-${alpineRel}-riscv64.img.zst"
+    def downloadUrl = "https://github.com/${scevAlpineRepo}/releases/download/${scevAlpineReleaseTag}/${assetName}"
+
+    def cacheDir = file("${buildDir}/alpine")
+    def archive = file("${cacheDir}/${assetName}")
     def destFile = file('src/main/resources/assets/scev/firmware/alpine_rootfs.img')
 
+    // URL is an input so a pin bump (alpineRel) invalidates the task
+    // and forces a re-download even if the cached archive name happens
+    // to collide. destFile is the output — Gradle's UP-TO-DATE check
+    // skips the whole task when destFile already exists and the URL
+    // hasn't changed.
+    inputs.property('downloadUrl', downloadUrl)
     outputs.file destFile
-    inputs.property('alpineVersion', alpineVersion)
-    // Track the scev-alpine recipe's input files so Gradle invalidates
-    // the task output when a kernel-config or build-script tweak lands.
-    def scevAlpineDir = System.getenv('SCEV_ALPINE_REPO')
-            ? file(System.getenv('SCEV_ALPINE_REPO'))
-            : file("${rootDir}/../scev-alpine")
-    if (scevAlpineDir.exists()) {
-        inputs.files(
-            fileTree(dir: scevAlpineDir, includes: ['config/**', 'tools/**', 'Makefile', 'Dockerfile'])
-        ).withPropertyName('scevAlpineRecipe')
-    }
 
     doLast {
-        // Resolve scev-alpine clone location. Sibling checkout is the
-        // dev-friendly default — matches how the mod and scev-alpine are
-        // worked on in parallel. Env override wins for CI / custom layouts.
-        // Missing clone → clone it under ${buildDir} so a first-time
-        // checkout of the mod still builds.
-        if (!scevAlpineDir.exists()) {
-            def fallbackClone = file("${buildDir}/scev-alpine")
-            if (!fallbackClone.exists()) {
-                logger.lifecycle("scev-alpine not found at ${scevAlpineDir} — cloning into ${fallbackClone}")
-                exec {
-                    commandLine 'git', 'clone', '--depth', '1',
-                            scevAlpineRepoUrl, fallbackClone.absolutePath
-                }
-            }
-            scevAlpineDir = fallbackClone
-        }
-        def outDir = new File(scevAlpineDir, 'out')
+        cacheDir.mkdirs()
 
-        // Build the Docker image for scev-alpine's recipe. Cheap if the
-        // layers are already in the local Docker cache; one-time cost on
-        // first invocation.
-        logger.lifecycle("Building scev-alpine-builder Docker image (cached after first run)")
-        exec {
-            workingDir scevAlpineDir
-            commandLine 'docker', 'build', '-t', 'scev-alpine-builder', '.'
-        }
-
-        // Run scev-alpine's full sysinstall pipeline inside Docker.
-        // `build/` goes into a docker-managed volume (case-sensitive ext4)
-        // so kernel-source extraction doesn't collide on macOS APFS's
-        // case-insensitive bind mount — upstream Linux has files whose
-        // only distinction is case (ipt_ECN.h vs ipt_ecn.h) and APFS
-        // silently merges them, breaking the build. This separation of
-        // the build cache from the host checkout is a hard requirement
-        // on macOS; it's harmless on Linux hosts.
-        logger.lifecycle("Running scev-alpine sysinstall build (first run ~45 min, incremental <1 min)")
-        exec {
-            workingDir scevAlpineDir
-            commandLine 'docker', 'run', '--rm',
-                    '--memory=8g', '--cpus=6',
-                    '-v', "${outDir.absolutePath}:/work/out",
-                    '-v', "${new File(scevAlpineDir, 'tools').absolutePath}:/work/tools:ro",
-                    '-v', "${new File(scevAlpineDir, 'config').absolutePath}:/work/config:ro",
-                    '-v', "${new File(scevAlpineDir, 'Makefile').absolutePath}:/work/Makefile:ro",
-                    '-v', 'scev-alpine-build:/work/build',
-                    '-w', '/work',
-                    'scev-alpine-builder',
-                    'sh', '-c', "make ALPINE_VER=${alpineVersion} sysinstall"
-        }
-
-        // Pick up the resulting sys-install image. The filename embeds
-        // the exact point release (e.g. alpine-scev-sysinstall-3.23.4-riscv64.img),
-        // so we glob for it rather than hardcoding.
-        def sysinstallImg = fileTree(dir: outDir, include: 'alpine-scev-sysinstall-*-riscv64.img').singleFile
-        destFile.parentFile.mkdirs()
-
-        // Copy the 1 GiB image while preserving sparseness. java.nio.Files.copy
-        // writes zero bytes literally on some JDK/FS combinations, densifying a
-        // ~70 MiB-of-content ext4 into a full 1 GiB on disk — pure waste when
-        // the source is sparse. macOS `cp` handles holes natively; GNU `cp`
-        // needs --sparse=always. Use whichever is available.
-        delete destFile
-        if (org.gradle.internal.os.OperatingSystem.current().isMacOsX()) {
-            // BSD cp on macOS detects sparse regions by default.
-            exec { commandLine 'cp', sysinstallImg.absolutePath, destFile.absolutePath }
+        if (!archive.exists()) {
+            logger.lifecycle("Downloading ${assetName} from ${scevAlpineRepo}@${scevAlpineReleaseTag}")
+            // -fL: fail on HTTP errors, follow redirects (GitHub release
+            // assets redirect to objects.githubusercontent.com).
+            exec { commandLine 'curl', '-fL', '--progress-bar',
+                    '-o', archive.absolutePath, downloadUrl }
         } else {
-            // GNU cp: force sparse-always so the tail holes are kept.
-            exec { commandLine 'cp', '--sparse=always',
-                    sysinstallImg.absolutePath, destFile.absolutePath }
+            logger.lifecycle("Reusing cached ${archive.name}")
         }
 
-        // Surface both numbers so regressions are easy to spot during dev.
+        // zstd -d to a temp path first; we need a real file (not a stream)
+        // to do the sparse copy below. -f overwrites a stale temp from a
+        // previous failed run. The decompressed image is ~1 GiB logical
+        // but mostly zero — sparse on the source side, dense after zstd.
+        def tmp = file("${cacheDir}/${destFile.name}.tmp")
+        delete tmp
+        logger.lifecycle("Decompressing ${archive.name}")
+        exec { commandLine 'zstd', '-d', '-f',
+                '-o', tmp.absolutePath, archive.absolutePath }
+
+        // Sparse-copy the dense temp into resources. java.nio.Files.copy
+        // writes zero bytes literally on some JDK/FS combinations,
+        // ballooning a ~70 MiB-of-content ext4 into a full 1 GiB on disk.
+        // Shell `cp` handles holes correctly: BSD cp on macOS detects
+        // them by default; GNU cp on Linux needs --sparse=always.
+        delete destFile
+        destFile.parentFile.mkdirs()
+        if (org.gradle.internal.os.OperatingSystem.current().isMacOsX()) {
+            exec { commandLine 'cp', tmp.absolutePath, destFile.absolutePath }
+        } else {
+            exec { commandLine 'cp', '--sparse=always',
+                    tmp.absolutePath, destFile.absolutePath }
+        }
+        delete tmp
+
+        // Surface both numbers so regressions in sparse handling are
+        // visible in the build log — densifying the image silently is
+        // the kind of thing that wastes 1 GiB per dev install.
         def actualKb = new ByteArrayOutputStream().withCloseable { out ->
             exec {
                 commandLine 'du', '-k', destFile.absolutePath
@@ -704,14 +662,14 @@ tasks.register('assembleAlpineImage') {
             }
             Long.parseLong(out.toString().trim().split(/\s+/)[0])
         }
-        logger.lifecycle("Installed ${sysinstallImg.name} -> ${destFile.name} "
+        logger.lifecycle("Installed ${assetName} -> ${destFile.name} "
                 + "(${destFile.length() / 1024 / 1024} MiB logical, "
                 + "${actualKb / 1024} MiB actual)")
     }
 }
 
 
-processResources.dependsOn 'assembleAlpineImage'
+processResources.dependsOn 'fetchAlpineImage'
 
 idea {
     module {
