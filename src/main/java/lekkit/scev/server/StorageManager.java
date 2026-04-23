@@ -7,11 +7,12 @@ package lekkit.scev.server;
 
 import com.mojang.logging.LogUtils;
 import java.io.IOException;
+import java.io.InputStream;
+import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.util.EnumSet;
 import java.util.UUID;
@@ -153,6 +154,14 @@ public final class StorageManager {
      *       the user has manually dropped in).</li>
      * </ol>
      *
+     * <p>The copy is <b>sparse-preserving</b>: zero-filled 64 KiB chunks are
+     * skipped (leaving a filesystem-level hole at the destination), so a 1 GiB
+     * mostly-empty ext4 template materialises as ~60–80 MiB of actual disk
+     * usage rather than a full 1 GiB per NVMe item. A plain
+     * {@link Files#copy(Path, Path, java.nio.file.CopyOption...)} would write
+     * the zeros byte-for-byte, and three preloaded NVMes would cost 3 GiB of
+     * host storage. See {@link #sparseCopy}.
+     *
      * <p>Returns {@code true} iff the image now exists at the per-UUID path.
      */
     public static boolean copyImage(UUID imageUuid, String origin) {
@@ -170,31 +179,153 @@ public final class StorageManager {
                 // only enter this path when the per-UUID image doesn't yet
                 // exist, and a concurrent re-entry must NOT clobber user data
                 // that another caller just finished writing.
-                Files.copy(source, images.resolve(imageUuid + ".img"),
-                        StandardCopyOption.COPY_ATTRIBUTES);
+                sparseCopy(source, images.resolve(imageUuid + ".img"));
             } catch (IOException ignore) {
-                // fall through
+                // fall through — checkImage below reports the truth
             }
         }
         return checkImage(imageUuid);
     }
 
     /**
-     * Ensure an image exists for {@code imageUuid}. Priority:
+     * Byte-identical file copy that preserves sparse regions. Reads the source
+     * in 64 KiB chunks; any chunk that is entirely zero is <i>not</i> written
+     * to the destination — the destination channel's position advances past
+     * it, leaving a filesystem hole. The final logical size is enforced by
+     * writing a zero byte at {@code source.size() - 1} when the last chunk of
+     * the source was skipped.
+     *
+     * <p>On APFS / ext4 / NTFS this yields real-disk-usage roughly equal to
+     * the non-zero content of the source, not the source's logical size — the
+     * point of the exercise.
+     *
+     * <p>64 KiB chunk size is a compromise: large enough to avoid per-chunk
+     * syscall overhead dominating throughput, small enough that a 4 KiB
+     * filesystem block's worth of non-zero data doesn't pull a whole MiB
+     * into actual allocation.
+     */
+    static void sparseCopy(Path source, Path target) throws IOException {
+        final int chunk = 64 * 1024;
+        try (FileChannel in = FileChannel.open(source, StandardOpenOption.READ);
+             FileChannel out = FileChannel.open(target,
+                     StandardOpenOption.CREATE_NEW,
+                     StandardOpenOption.WRITE,
+                     StandardOpenOption.SPARSE)) {
+            long sourceSize = in.size();
+            ByteBuffer buf = ByteBuffer.allocate(chunk);
+            long pos = 0;
+            boolean lastChunkSkipped = false;
+            while (pos < sourceSize) {
+                buf.clear();
+                int n = in.read(buf, pos);
+                if (n <= 0) break;
+                if (isAllZero(buf.array(), n)) {
+                    pos += n;
+                    lastChunkSkipped = true;
+                    continue;
+                }
+                buf.limit(n).position(0);
+                out.position(pos);
+                int written = 0;
+                while (written < n) written += out.write(buf);
+                pos += n;
+                lastChunkSkipped = false;
+            }
+            // If we short-circuited a trailing zero chunk, the output file is
+            // now short by that tail. Re-extend it to the source's logical
+            // size so downstream callers (growImage, the NVMe device) see
+            // the same capacity the source advertised.
+            if (lastChunkSkipped || out.size() < sourceSize) {
+                if (sourceSize > 0) {
+                    out.position(sourceSize - 1);
+                    out.write(ByteBuffer.wrap(new byte[] { 0 }));
+                }
+            }
+        }
+    }
+
+    /**
+     * True iff the first {@code len} bytes of {@code buf} are all zero.
+     * Hot path inside {@link #sparseCopy}; kept in a method so JIT can inline
+     * it and so the byte-equality check is in one obvious place.
+     */
+    private static boolean isAllZero(byte[] buf, int len) {
+        for (int i = 0; i < len; i++) {
+            if (buf[i] != 0) return false;
+        }
+        return true;
+    }
+
+    /**
+     * Sparse-extend an existing per-UUID image to {@code imageMb}. A no-op when
+     * the file is already at least that size — never truncates. Used by
+     * {@link #initImage} to reconcile "declared disk capacity" (what the item
+     * tooltip advertises and what the guest kernel sees as the NVMe device
+     * size) with "template file size" (what the shipped classpath asset
+     * happens to weigh on disk).
+     *
+     * <p>The guest's filesystem is not automatically grown — that needs a
+     * guest-side {@code resize2fs} pass (the scev-mod Buildroot rootfs ships
+     * one in its {@code /init} pivot script). What this method does is ensure
+     * the host-side block device is big enough for the guest to expand into.
+     *
+     * <p>No-op if the file isn't present; the caller was expected to land it
+     * via {@link #copyImage} or {@link #createImage} first.
+     */
+    static boolean growImage(UUID imageUuid, long imageMb) {
+        if (imageMb <= 0) return true;
+        Path path = images.resolve(imageUuid + ".img");
+        if (!Files.isRegularFile(path)) return false;
+        long targetBytes = imageMb << 20;
+        try (FileChannel ch = FileChannel.open(path,
+                StandardOpenOption.WRITE, StandardOpenOption.READ)) {
+            if (ch.size() >= targetBytes) return true; // already ≥ declared cap
+            // Same sparse-extend trick createImage uses: seek to targetBytes-1
+            // and write a zero byte. The underlying filesystem allocates a
+            // single terminal block and leaves everything before it as a
+            // sparse hole — no per-MiB cost on the host until the guest
+            // actually writes there.
+            ch.position(targetBytes - 1);
+            ch.write(java.nio.ByteBuffer.wrap(new byte[] { 0 }));
+            return ch.size() == targetBytes;
+        } catch (IOException e) {
+            LOG.warn("Failed to grow image {} to {} MiB: {}", imageUuid, imageMb, e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * Ensure an image exists for {@code imageUuid} and matches the declared
+     * {@code imageMb} capacity. Priority:
+     *
      * <ol>
-     *   <li>If the image already exists on disk, return true.</li>
-     *   <li>If {@code origin} is non-null, try copying the template. If that
-     *       succeeds, return true.</li>
-     *   <li>Otherwise (including when the template copy failed because the
-     *       asset wasn't shipped), fall back to creating a blank sparse image.
-     *       A blank flash is useful as "empty storage" — e.g. a flash chip
-     *       without firmware still boots the splash; a blank NVMe lets the
-     *       user install an OS themselves.</li>
+     *   <li>If the image already exists on disk, sparse-extend it to
+     *       {@code imageMb} if smaller, then return true. Guarantees the
+     *       "declared capacity" invariant for disks allocated by older mod
+     *       versions that shipped smaller templates.</li>
+     *   <li>If {@code origin} is non-null, try copying the template. Then
+     *       sparse-extend to {@code imageMb} — templates ship at whatever
+     *       size the build recipe happens to produce (e.g. a 64 MiB
+     *       Buildroot ext4), which is typically smaller than the declared
+     *       1 GiB NvmeItem capacity. Growing here lets the guest
+     *       {@code resize2fs} to the full advertised size on first boot.</li>
+     *   <li>Otherwise, fall back to creating a blank sparse image at
+     *       {@code imageMb}. Useful for blank {@code NvmeItem}s and for
+     *       workstations where the mod ships without the asset template.</li>
      * </ol>
      */
     public static boolean initImage(UUID imageUuid, long imageMb, String origin) {
-        if (checkImage(imageUuid)) return true;
-        if (origin != null && copyImage(imageUuid, origin)) return true;
+        if (checkImage(imageUuid)) {
+            // Existing image may have been allocated by an older mod version
+            // that shipped a smaller template. Grow it to match the current
+            // declared capacity — cheap sparse-extend on existing data.
+            growImage(imageUuid, imageMb);
+            return true;
+        }
+        if (origin != null && copyImage(imageUuid, origin)) {
+            growImage(imageUuid, imageMb);
+            return true;
+        }
         // Fallback: create a blank sparse image at the declared size. This keeps
         // the attach path working when the mod ships without asset templates —
         // the BootSplash will still paint, and bootrom-loading will return

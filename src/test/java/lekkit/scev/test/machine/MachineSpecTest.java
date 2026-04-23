@@ -43,7 +43,12 @@ class MachineSpecTest {
         assertFalse(s.hasGpio());
         assertFalse(s.hasSound(),
                 "Default spec must not attach a sound card — opt-in via the sound_card PCI slot.");
-        assertEquals("root=/dev/nvme0n1 rw", s.cmdline());
+        assertEquals("", s.cmdline(),
+                "Default cmdline is empty — the pre-abstraction "
+                        + "\"root=/dev/nvme0n1 rw\" default was benign only because Linux "
+                        + "ignored it under an initramfs rootfs. Post-abstraction "
+                        + "(ScevDiskTemplate.hasRootFilesystem × ScevFirmware.wantsNvmeRoot), "
+                        + "root= is injected by the parser only when both sides opt in.");
         assertTrue(s.nvmeDrives().isEmpty());
         assertFalse(s.hasKernel(),
                 "Default spec must not carry a KernelSpec — only the flash-chip path opts in.");

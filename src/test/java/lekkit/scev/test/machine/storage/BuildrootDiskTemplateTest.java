@@ -45,6 +45,21 @@ class BuildrootDiskTemplateTest {
     }
 
     @Test
+    @DisplayName("SIZE_MB is 1 GiB and matches NvmeItem.SIZE_MB")
+    void declaredSize() {
+        // Blank NvmeItem and the preloaded Buildroot template both advertise
+        // 1 GiB. StorageManager.initImage sparse-extends the per-UUID image
+        // after the template copy so declared and on-disk capacity agree.
+        // If this drifts the tooltip starts lying again — the exact bug
+        // the abstraction refactor set out to fix.
+        assertEquals(1024L, BuildrootDiskTemplate.INSTANCE.sizeMb(),
+                "BuildrootDiskTemplate.SIZE_MB must stay at 1024 MiB (1 GiB) — "
+                        + "matches the NvmeItem tooltip and the Alpine sys-install image.");
+        assertEquals(lekkit.scev.items.NvmeItem.SIZE_MB, BuildrootDiskTemplate.INSTANCE.sizeMb(),
+                "Drift from NvmeItem.SIZE_MB — bump both together.");
+    }
+
+    @Test
     @DisplayName("Superblock magic 0xEF53 at offset 1080 (asset is actually ext2)")
     void superblockMagic() throws IOException {
         // ext2/3/4 layout: 1024-byte boot sector, then superblock at 1024.

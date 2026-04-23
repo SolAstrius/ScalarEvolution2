@@ -566,247 +566,150 @@ tasks.register('buildH264Native') {
 processResources.dependsOn 'buildH264Native'
 
 // --------------------------------------------------------------------
-// Alpine preloaded-NVMe image — assembled locally from parts
+// Alpine preloaded-NVMe image — SYS-INSTALL produced by scev-alpine
 // --------------------------------------------------------------------
-// The Alpine NVMe image is an ext4 filesystem wrapped in an MBR, with
-// a scev-patched Linux kernel + modules + Alpine userspace inside. We
-// assemble it on the mod side rather than fetching a pre-built copy
-// because image-level concerns (cmdline, partition size, apkovl
-// content) evolve faster than the kernel itself and rebuilding the
-// whole scev-alpine kernel to iterate on an extlinux.conf tweak is
-// wasteful.
+// Historical context: the previous revision of this task assembled a
+// LIVE-mode Alpine image in-place — extract alpine-uboot tarball, swap
+// in a scev-patched kernel, wrap an apkovl with an auto-commit daemon
+// that tar'd /etc /root /home /var/log into the boot partition every
+// few seconds to fake persistence. That was a hack: pid 1 still ran
+// from tmpfs, every guest write still hit RAM, and "persistence" was a
+// snapshot loop that lost the last N seconds on every hard-poweroff.
+// It shipped next to Buildroot (which did real pid-1-on-disk pivot)
+// and made the mod's disk-persistence story asymmetric.
 //
-// Pipeline:
-//   1. Fetch vmlinuz-lts + modloop-lts from scev-alpine/latest release
-//      (the kernel pieces — rebuilt by scev-alpine CI on every push).
-//   2. Fetch alpine-uboot-<ver>-riscv64.tar.gz from dl-cdn.alpinelinux.org
-//      (Alpine's stock boot layout: extlinux.conf, initramfs, apks repo).
-//   3. Extract tarball, overlay our kernel + modloop, patch extlinux.conf
-//      to route console to our UART + framebuffer.
-//   4. truncate + sfdisk (MBR with one bootable ext4 partition).
-//   5. mkfs.ext4 -E offset= inside the partition window with content
-//      from the staging dir.
+// The new task delegates to the scev-alpine project's `make sysinstall`
+// pipeline (tools/build-nvme-sysinstall.sh over there), which:
+//   1. Cross-compiles the scev-patched linux-lts kernel with NVMe + ext4
+//      built-in (so the kernel can mount its own root from cmdline,
+//      no initramfs required).
+//   2. Bootstraps a real Alpine userspace into a staging dir via
+//      apk.static --root <stage> --arch riscv64 add alpine-base …
+//   3. Drops the kernel into /boot, writes /extlinux/extlinux.conf with
+//      root=/dev/nvme0n1p1, configures /etc/fstab, /etc/hostname,
+//      OpenRC runlevels, and networking.
+//   4. mkfs.ext4 over the whole rootfs into an MBR-wrapped partition.
 //
-// Host tools required: tar, truncate, sfdisk, mkfs.ext4. Linux-friendly;
-// macOS/Windows devs need them via WSL, brew (util-linux + e2fsprogs),
-// or a nix-shell (the flake in the repo root has them).
-ext.alpineKernelRepo       = 'SolAstrius/scev-alpine'
-ext.alpineKernelTag        = 'latest'
-ext.alpineVersion          = '3.23.4'
-ext.alpineVersionBranch    = '3.23'    // for URL path: releases/v<branch>/riscv64/
-// modloop_verify=no: Alpine signs modloop-lts with its own key, and its
-// initramfs injects the corresponding signature into /var/cache/misc/
-// every boot. Since scev-alpine builds its own modloop, that stale sig
-// fails verification — harmless (the modloop still mounts), but prints a
-// red [!] "Failed to verify signature of modloop-lts!" on every boot.
-// Signing properly would require either rebuilding the initramfs with
-// our own key (large CI change) or a custom sysinit service that nukes
-// Alpine's stale sig before the modloop service runs (brittle). The
-// threat model here doesn't justify either — the VM image is already
-// modifiable from the Minecraft save files by any attacker who can reach
-// them. Turn the check off at the kernel cmdline level and move on.
-ext.alpineExtlinuxAppend   = 'modules=loop,squashfs,sd-mod,usb-storage ' +
-                             'modloop_verify=no ' +
-                             'console=ttyS0,115200 earlycon=sbi console=tty0'
-ext.alpinePartStartKb      = 1024      // standard 1 MiB alignment
-ext.alpineFsHeadroomPct    = 20
-ext.alpineFsLabel          = 'SCEV_ALPINE'
-ext.alpineFsUuid           = 'deadbeef-cafe-beef-feed-a1befacefeed'
-// First-boot apkovl: DHCP on eth0 + online main/community repos so
-// `apk add <anything>` works out of the box. Alpine init-stage-1 picks
-// up *.apkovl.tar.gz from the boot-media root and extracts it over /.
-ext.alpineApkovlEnabled    = true
+// Result: an NVMe image where `touch /root/foo; reboot; ls /root/foo`
+// actually works — every write goes directly to the on-disk ext4, no
+// snapshots, no daemons, journal replay on hard-cut. Same architectural
+// shape as Buildroot's pivot, just with the work front-loaded at image
+// assembly instead of at guest boot.
+//
+// Local build: requires Docker + a clone of github.com/SolAstrius/scev-alpine
+// at one of:
+//   - ${rootDir}/../scev-alpine   (sibling clone — dev convention)
+//   - $SCEV_ALPINE_REPO           (env override)
+// If neither is present, the task clones it into ${buildDir}/scev-alpine.
+// First-time build: ~45 min (cross-toolchain + kernel). Incremental: <1 min.
+ext.alpineVersion = '3.23'
+ext.scevAlpineRepoUrl = 'https://github.com/SolAstrius/scev-alpine.git'
 
 tasks.register('assembleAlpineImage') {
     group = 'native'
-    description = "Assemble Alpine preloaded-NVMe image from ${alpineKernelRepo}@${alpineKernelTag} + Alpine upstream"
+    description = "Build (or reuse) scev-alpine's sys-install NVMe image and install it into resources"
 
-    def alpineBuildDir = file("${buildDir}/alpine")
     def destFile = file('src/main/resources/assets/scev/firmware/alpine_rootfs.img')
 
     outputs.file destFile
-    // Bust the cache whenever any of the image-shaping knobs change.
-    // Re-running the whole assembly is cheap (~10 s with warm downloads)
-    // so liberal invalidation is fine.
-    inputs.property('alpineKernelTag', alpineKernelTag)
-    inputs.property('alpineKernelRepo', alpineKernelRepo)
     inputs.property('alpineVersion', alpineVersion)
-    inputs.property('alpineExtlinuxAppend', alpineExtlinuxAppend)
-    inputs.property('alpinePartStartKb', alpinePartStartKb)
-    inputs.property('alpineFsHeadroomPct', alpineFsHeadroomPct)
-    inputs.property('alpineFsLabel', alpineFsLabel)
-    inputs.property('alpineFsUuid', alpineFsUuid)
-    inputs.property('alpineApkovlEnabled', alpineApkovlEnabled)
+    // Track the scev-alpine recipe's input files so Gradle invalidates
+    // the task output when a kernel-config or build-script tweak lands.
+    def scevAlpineDir = System.getenv('SCEV_ALPINE_REPO')
+            ? file(System.getenv('SCEV_ALPINE_REPO'))
+            : file("${rootDir}/../scev-alpine")
+    if (scevAlpineDir.exists()) {
+        inputs.files(
+            fileTree(dir: scevAlpineDir, includes: ['config/**', 'tools/**', 'Makefile', 'Dockerfile'])
+        ).withPropertyName('scevAlpineRecipe')
+    }
 
     doLast {
-        alpineBuildDir.mkdirs()
-
-        def vmlinuz = new File(alpineBuildDir, 'vmlinuz-lts')
-        def modloop = new File(alpineBuildDir, 'modloop-lts')
-        def tarball = new File(alpineBuildDir, "alpine-uboot-${alpineVersion}-riscv64.tar.gz")
-
-        // Streaming download helper. Skips when the file is already
-        // present at non-zero size — we rely on the upstream URL being
-        // immutable for a pinned tag; the rolling `latest` tag can be
-        // force-refreshed by deleting build/alpine/.
-        def download = { urlStr, target ->
-            if (target.exists() && target.length() > 0) {
-                logger.info("cached: ${target.name}")
-                return
-            }
-            logger.lifecycle("Fetching ${urlStr}")
-            def tmp = new File(target.parentFile, target.name + '.part')
-            try {
-                new URL(urlStr).withInputStream { input ->
-                    tmp.withOutputStream { output -> output << input }
+        // Resolve scev-alpine clone location. Sibling checkout is the
+        // dev-friendly default — matches how the mod and scev-alpine are
+        // worked on in parallel. Env override wins for CI / custom layouts.
+        // Missing clone → clone it under ${buildDir} so a first-time
+        // checkout of the mod still builds.
+        if (!scevAlpineDir.exists()) {
+            def fallbackClone = file("${buildDir}/scev-alpine")
+            if (!fallbackClone.exists()) {
+                logger.lifecycle("scev-alpine not found at ${scevAlpineDir} — cloning into ${fallbackClone}")
+                exec {
+                    commandLine 'git', 'clone', '--depth', '1',
+                            scevAlpineRepoUrl, fallbackClone.absolutePath
                 }
-                tmp.renameTo(target)
-            } finally {
-                if (tmp.exists()) tmp.delete()
             }
+            scevAlpineDir = fallbackClone
         }
+        def outDir = new File(scevAlpineDir, 'out')
 
-        download("https://github.com/${alpineKernelRepo}/releases/download/${alpineKernelTag}/vmlinuz-lts", vmlinuz)
-        download("https://github.com/${alpineKernelRepo}/releases/download/${alpineKernelTag}/modloop-lts", modloop)
-        download("https://dl-cdn.alpinelinux.org/alpine/v${alpineVersionBranch}/releases/riscv64/alpine-uboot-${alpineVersion}-riscv64.tar.gz", tarball)
-
-        // Staging dir: Alpine tarball extracted, then our kernel + modloop
-        // overwritten on top. Clean on every run so leftover state from a
-        // previous assembly can't leak through.
-        def stagingDir = new File(alpineBuildDir, 'staging')
-        project.delete(stagingDir)
-        stagingDir.mkdirs()
-
+        // Build the Docker image for scev-alpine's recipe. Cheap if the
+        // layers are already in the local Docker cache; one-time cost on
+        // first invocation.
+        logger.lifecycle("Building scev-alpine-builder Docker image (cached after first run)")
         exec {
-            workingDir alpineBuildDir
-            commandLine 'tar', '-C', stagingDir.absolutePath, '-xf', tarball.absolutePath
-        }
-        // u-boot/ is Alpine's SPL + U-Boot binary. Our flash chip carries
-        // OpenSBI + U-Boot separately; drop Alpine's copy to save space.
-        project.delete(new File(stagingDir, 'u-boot'))
-
-        project.copy {
-            from(vmlinuz)
-            into new File(stagingDir, 'boot')
-            rename { 'vmlinuz-lts' }
-        }
-        project.copy {
-            from(modloop)
-            into new File(stagingDir, 'boot')
-            rename { 'modloop-lts' }
+            workingDir scevAlpineDir
+            commandLine 'docker', 'build', '-t', 'scev-alpine-builder', '.'
         }
 
-        // Patch extlinux.conf's APPEND line. Alpine ships
-        //   modules=loop,squashfs,sd-mod,usb-storage quiet
-        // which hides kernel printk and doesn't route console to our UART
-        // or framebuffer. Our cmdline drops `quiet` and adds:
-        //   console=ttyS0,115200 earlycon=sbi console=tty0
-        // tty0 last so getty respawns on the framebuffer.
-        def extlinuxConf = new File(stagingDir, 'extlinux/extlinux.conf')
-        def patched = extlinuxConf.text.replaceAll(/(?m)^APPEND\s+.*/, "APPEND ${alpineExtlinuxAppend}")
-        extlinuxConf.text = patched
-
-        // First-boot apkovl. Alpine's init-stage-1 globs the boot-media
-        // root for *.apkovl.tar.gz, untars into / on tmpfs, runs
-        // openrc-setup to materialise runlevels, then apk-adds anything
-        // in /etc/apk/world. We pre-seed:
-        //   - /etc/network/interfaces : dhcp eth0 so userspace TAP gets
-        //     a 192.168.0.100 lease on boot (no manual `ip link up`).
-        //   - /etc/apk/repositories   : offline /media repo + online
-        //     main + community so `apk add` works immediately.
-        //   - /etc/runlevels/boot/networking → /etc/init.d/networking
-        //     symlink so OpenRC actually brings the interface up.
-        // Nothing in /etc/apk/world yet — we ship no preinstalled extras
-        // on top of the base image. Users can `apk add` interactively
-        // and `lbu commit` to grow their own apkovl if they want.
-        if (alpineApkovlEnabled) {
-            def apkovlRoot = new File(alpineBuildDir, 'apkovl')
-            project.delete(apkovlRoot)
-            apkovlRoot.mkdirs()
-
-            def writeFile = { relPath, content ->
-                def f = new File(apkovlRoot, relPath)
-                f.parentFile.mkdirs()
-                f.text = content
-            }
-
-            writeFile('etc/network/interfaces', '''\
-auto lo
-iface lo inet loopback
-
-auto eth0
-iface eth0 inet dhcp
-''')
-
-            writeFile('etc/apk/repositories', """\
-/media/nvme0n1p1/apks
-https://dl-cdn.alpinelinux.org/alpine/v${alpineVersionBranch}/main
-https://dl-cdn.alpinelinux.org/alpine/v${alpineVersionBranch}/community
-""")
-
-            // OpenRC runlevel symlink. tar preserves it, init replays it.
-            def runlevelDir = new File(apkovlRoot, 'etc/runlevels/boot')
-            runlevelDir.mkdirs()
-            exec {
-                commandLine 'ln', '-sf', '/etc/init.d/networking',
-                    new File(runlevelDir, 'networking').absolutePath
-            }
-
-            // Marker that tells Alpine's initramfs (`init` script, line
-            // ~916: `if [ -f "$sysroot/etc/.default_boot_services" ...`) to
-            // rc_add the default sysinit/boot services on top of our
-            // hand-rolled apkovl — notably `rc_add modloop sysinit`, which
-            // is what mounts /boot/modloop-lts and populates /lib/modules.
-            //
-            // The path matters. Alpine's init looks for
-            // /etc/.default_boot_services inside the extracted apkovl; if
-            // we write it at the apkovl root (./.default_boot_services) it
-            // lands at /.default_boot_services and the check misses, so
-            // modloop never gets added to sysinit → /lib/modules stays
-            // empty → no r8169.ko → no eth0.
-            writeFile('etc/.default_boot_services', '')
-
-            def apkovlTar = new File(stagingDir, 'localhost.apkovl.tar.gz')
-            exec {
-                workingDir apkovlRoot
-                commandLine 'tar', '--owner=0', '--group=0', '-czf',
-                    apkovlTar.absolutePath, '.'
-            }
-        }
-
-        // Compute image size: content size + headroom + boot-region +
-        // round up to whole MiB for mkfs alignment.
-        long contentBytes = 0
-        stagingDir.eachFileRecurse { f -> if (f.isFile()) contentBytes += f.length() }
-        long contentKb = (long) Math.ceil(contentBytes / 1024.0)
-        long imgKb = ((contentKb * (100 + alpineFsHeadroomPct) / 100 + alpinePartStartKb + 1023)
-                        / 1024 * 1024) as long
-        long fsKb = imgKb - alpinePartStartKb
-        long fsOffsetBytes = (alpinePartStartKb as long) * 1024
-
-        def img = new File(alpineBuildDir, 'alpine_rootfs.img')
-        exec { commandLine 'truncate', '-s', "${imgKb}K", img.absolutePath }
+        // Run scev-alpine's full sysinstall pipeline inside Docker.
+        // `build/` goes into a docker-managed volume (case-sensitive ext4)
+        // so kernel-source extraction doesn't collide on macOS APFS's
+        // case-insensitive bind mount — upstream Linux has files whose
+        // only distinction is case (ipt_ECN.h vs ipt_ecn.h) and APFS
+        // silently merges them, breaking the build. This separation of
+        // the build cache from the host checkout is a hard requirement
+        // on macOS; it's harmless on Linux hosts.
+        logger.lifecycle("Running scev-alpine sysinstall build (first run ~45 min, incremental <1 min)")
         exec {
-            // sfdisk reads its partition table description from stdin;
-            // pipe via 'sh -c' since Gradle's exec doesn't have a
-            // standardInput shortcut for string literals.
-            commandLine 'sh', '-c',
-                "echo 'start=2048, type=83, bootable' | sfdisk --quiet ${img.absolutePath}"
-        }
-        exec {
-            commandLine 'mkfs.ext4', '-F', '-q',
-                '-E', "offset=${fsOffsetBytes}",
-                '-L', alpineFsLabel,
-                '-U', alpineFsUuid,
-                '-d', stagingDir.absolutePath,
-                img.absolutePath, "${fsKb}K"
+            workingDir scevAlpineDir
+            commandLine 'docker', 'run', '--rm',
+                    '--memory=8g', '--cpus=6',
+                    '-v', "${outDir.absolutePath}:/work/out",
+                    '-v', "${new File(scevAlpineDir, 'tools').absolutePath}:/work/tools:ro",
+                    '-v', "${new File(scevAlpineDir, 'config').absolutePath}:/work/config:ro",
+                    '-v', "${new File(scevAlpineDir, 'Makefile').absolutePath}:/work/Makefile:ro",
+                    '-v', 'scev-alpine-build:/work/build',
+                    '-w', '/work',
+                    'scev-alpine-builder',
+                    'sh', '-c', "make ALPINE_VER=${alpineVersion} sysinstall"
         }
 
+        // Pick up the resulting sys-install image. The filename embeds
+        // the exact point release (e.g. alpine-scev-sysinstall-3.23.4-riscv64.img),
+        // so we glob for it rather than hardcoding.
+        def sysinstallImg = fileTree(dir: outDir, include: 'alpine-scev-sysinstall-*-riscv64.img').singleFile
         destFile.parentFile.mkdirs()
-        destFile.bytes = img.bytes
-        logger.lifecycle("Assembled ${destFile.name} (${destFile.length() / 1024 / 1024} MiB, content ~${contentKb} KiB)")
+
+        // Copy the 1 GiB image while preserving sparseness. java.nio.Files.copy
+        // writes zero bytes literally on some JDK/FS combinations, densifying a
+        // ~70 MiB-of-content ext4 into a full 1 GiB on disk — pure waste when
+        // the source is sparse. macOS `cp` handles holes natively; GNU `cp`
+        // needs --sparse=always. Use whichever is available.
+        delete destFile
+        if (org.gradle.internal.os.OperatingSystem.current().isMacOsX()) {
+            // BSD cp on macOS detects sparse regions by default.
+            exec { commandLine 'cp', sysinstallImg.absolutePath, destFile.absolutePath }
+        } else {
+            // GNU cp: force sparse-always so the tail holes are kept.
+            exec { commandLine 'cp', '--sparse=always',
+                    sysinstallImg.absolutePath, destFile.absolutePath }
+        }
+
+        // Surface both numbers so regressions are easy to spot during dev.
+        def actualKb = new ByteArrayOutputStream().withCloseable { out ->
+            exec {
+                commandLine 'du', '-k', destFile.absolutePath
+                standardOutput = out
+            }
+            Long.parseLong(out.toString().trim().split(/\s+/)[0])
+        }
+        logger.lifecycle("Installed ${sysinstallImg.name} -> ${destFile.name} "
+                + "(${destFile.length() / 1024 / 1024} MiB logical, "
+                + "${actualKb / 1024} MiB actual)")
     }
 }
+
 
 processResources.dependsOn 'assembleAlpineImage'
 

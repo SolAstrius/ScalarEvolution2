@@ -5,6 +5,7 @@
  */
 package lekkit.scev.machine;
 
+import com.mojang.logging.LogUtils;
 import java.util.UUID;
 import lekkit.scev.items.CpuItem;
 import lekkit.scev.items.FirmwareBlob;
@@ -21,11 +22,14 @@ import lekkit.scev.items.SocItem;
 import lekkit.scev.items.StorageItem;
 import lekkit.scev.machine.firmware.FirmwareRegistry;
 import lekkit.scev.machine.firmware.ScevFirmware;
+import lekkit.scev.machine.storage.DiskTemplateRegistry;
+import lekkit.scev.machine.storage.ScevDiskTemplate;
 import lekkit.scev.main.ScevDataComponents;
 import net.minecraft.core.NonNullList;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.item.ItemStack;
 import org.jetbrains.annotations.Nullable;
+import org.slf4j.Logger;
 
 /**
  * Pure function that derives a {@link MachineSpec} from a motherboard
@@ -46,6 +50,8 @@ import org.jetbrains.annotations.Nullable;
  * — higher layers decide whether that should abort the boot or fall through.
  */
 public final class MachineSpecParser {
+    private static final Logger LOG = LogUtils.getLogger();
+
     /**
      * Minimum memory the machine gets even with zero RAM sticks and no
      * firmware installed.
@@ -79,8 +85,25 @@ public final class MachineSpecParser {
     /** Default ISA string if no other signal supplies one. */
     public static final String DEFAULT_ISA = "rv64";
 
-    /** Default kernel cmdline. */
-    public static final String DEFAULT_CMDLINE = "root=/dev/nvme0n1 rw";
+    /**
+     * Default kernel cmdline before firmware- and disk-driven fragments are
+     * appended.
+     *
+     * <p>Empty — the pre-abstraction value was {@code "root=/dev/nvme0n1 rw"},
+     * which only booted correctly because Linux ignores {@code root=} when
+     * the initramfs is the rootfs. With the
+     * {@link lekkit.scev.machine.storage.ScevDiskTemplate#hasRootFilesystem()}
+     * × {@link ScevFirmware#wantsNvmeRoot()} abstraction, the {@code root=}
+     * fragment is injected only when a rootfs-declaring disk is actually
+     * attached to a firmware that wants to honor it. See
+     * {@link #buildRootCmdlineFragment} for the assembly rule.
+     *
+     * <p>Firmware-contributed fragments (e.g. {@link lekkit.scev.machine.firmware.LinuxFirmware}'s
+     * console routing) are still appended on top, via
+     * {@link lekkit.scev.machine.rvvm.RvvmMachineBackend}'s
+     * {@code loadRegistryFirmware} path.
+     */
+    public static final String DEFAULT_CMDLINE = "";
 
     /**
      * Default M-mode firmware registry id for a freshly installed flash chip.
@@ -182,11 +205,19 @@ public final class MachineSpecParser {
         ItemStack cpuStack = comps.get(MotherboardItem.SLOT_CPU);
         if (cpuStack.getItem() instanceof CpuItem ci) smp = ci.getHartCount();
 
+        // Cmdline is assembled in two passes: start with the base default,
+        // then (after the NVMe walk) append `root=<dev> rw rootwait` iff
+        // firmware and disk metadata both opt into it. Final cmdline is
+        // set via builder.cmdline(...) at the end.
+        String cmdline = DEFAULT_CMDLINE;
+        // Device path of the first rootfs-declaring NVMe found below. Null
+        // means no rootfs disk is installed, so no `root=` injection.
+        String rootfsDevice = null;
+
         MachineSpec.Builder builder = MachineSpec.builder(machineUuid)
                 .memMb(totalMb)
                 .smp(smp)
-                .isa(DEFAULT_ISA)
-                .cmdline(DEFAULT_CMDLINE);
+                .isa(DEFAULT_ISA);
 
         // -- Firmware flash (slot 1) -----------------------------------------
         // The parser emits a registry-referenced FirmwareSpec; the backend
@@ -217,6 +248,13 @@ public final class MachineSpecParser {
         // seeds the per-UUID image from DiskTemplateRegistry. Otherwise the
         // spec carries only the raw origin and StorageManager's classpath
         // lookup / blank-fallback kicks in as before.
+        //
+        // The loop also remembers the first rootfs-declaring disk's
+        // rootDevice() so the cmdline-assembly step below can inject
+        // `root=<dev>` when the installed firmware opts in via
+        // ScevFirmware.wantsNvmeRoot(). First-match-wins on slot order —
+        // multi-disk rootfs selection would need an explicit "boot drive"
+        // marker and isn't modelled yet.
         for (int i = MotherboardItem.SLOT_NVME_START; i <= MotherboardItem.SLOT_NVME_END; i++) {
             if (!mb.isSlotEnabled(i)) continue;
             ItemStack s = comps.get(i);
@@ -238,6 +276,23 @@ public final class MachineSpecParser {
                     diskUuid, storageItem.getSizeMb(),
                     /* origin */ storageItem.getOrigin(),
                     /* templateId */ templateId));
+
+            // Resolve the template and note the first rootfs-declaring
+            // disk for the cmdline injection. Skip if the template id is
+            // null (blank NvmeItem — no metadata) or unresolved (mod
+            // removed between saves). Second+ rootfs disks log and lose.
+            if (templateId != null) {
+                ScevDiskTemplate template = DiskTemplateRegistry.get(templateId);
+                if (template != null && template.hasRootFilesystem()) {
+                    if (rootfsDevice == null) {
+                        rootfsDevice = template.rootDevice();
+                    } else {
+                        LOG.debug("Multiple rootfs-declaring disks installed for machine {}; "
+                                + "keeping {} (first slot wins), ignoring {} in slot {}",
+                                machineUuid, rootfsDevice, template.rootDevice(), i);
+                    }
+                }
+            }
         }
 
         // -- PCI cards (slots 8..13) -----------------------------------------
@@ -260,6 +315,32 @@ public final class MachineSpecParser {
         if (hasVga || forceDisplay) {
             builder.defaultDisplay();
         }
+
+        // -- Cmdline assembly ------------------------------------------------
+        // The `root=<dev> rw rootwait` fragment is injected only when BOTH
+        // sides of the abstraction opt in:
+        //
+        //   * A NVMe is installed whose template declared
+        //     hasRootFilesystem() = true (recorded above as
+        //     rootfsDevice).
+        //   * The resolved flash firmware declared wantsNvmeRoot() = true.
+        //
+        // Either missing -> no injection; the kernel falls back to whatever
+        // boot path the firmware itself chose (embedded initramfs for
+        // LinuxFirmware, disk-scanning extlinux for OpenFirmware).
+        //
+        // The resulting cmdline is the base (DEFAULT_CMDLINE, currently
+        // empty) plus the optional root= fragment. Firmware-contributed
+        // console routing (LinuxFirmware's `console=tty0 ...`) is appended
+        // later in RvvmMachineBackend via firmware.cmdlineAppend().
+        if (rootfsDevice != null && firmwareId != null) {
+            ScevFirmware fw = FirmwareRegistry.get(firmwareId);
+            if (fw != null && fw.wantsNvmeRoot()) {
+                String rootFragment = "root=" + rootfsDevice + " rw rootwait";
+                cmdline = cmdline.isEmpty() ? rootFragment : cmdline + " " + rootFragment;
+            }
+        }
+        builder.cmdline(cmdline);
 
         return builder.build();
     }

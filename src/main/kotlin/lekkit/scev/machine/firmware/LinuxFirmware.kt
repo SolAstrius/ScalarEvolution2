@@ -52,4 +52,19 @@ object LinuxFirmware : ScevFirmware {
     override fun minRamMb(): Long = MIN_RAM_MB
     override fun cmdlineAppend(): String = CMDLINE
     override fun displayName(): Component = Component.literal("Linux")
+
+    /**
+     * Linux loads via `rvvm_load_kernel` directly; the kernel reads `root=`
+     * off the cmdline at boot. When a rootfs-declaring NVMe is attached the
+     * parser injects `root=<template.rootDevice()> rw rootwait` so pid 1
+     * lives on the disk — `/dev/nvme0n1` for the raw Buildroot template,
+     * `/dev/nvme0n1p1` for the MBR-wrapped Alpine template. The initramfs
+     * `/init` pivot script reads that back off `/proc/cmdline` and mounts
+     * whichever device the parser chose.
+     *
+     * Without this override, injection never fires and every guest write
+     * hits the embedded initramfs tmpfs — the exact asymmetry that the
+     * abstraction exists to prevent.
+     */
+    override fun wantsNvmeRoot(): Boolean = true
 }

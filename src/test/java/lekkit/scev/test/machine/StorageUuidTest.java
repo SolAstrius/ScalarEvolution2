@@ -98,7 +98,9 @@ class StorageUuidTest {
     @DisplayName("getSizeMb matches the declared flash/nvme sizes")
     void sizesMatch() {
         assertEquals(8, flash().getSizeMb());
-        assertEquals(2048, nvme().getSizeMb());
+        assertEquals(lekkit.scev.items.NvmeItem.SIZE_MB, nvme().getSizeMb(),
+                "Blank NvmeItem advertises 1 GiB — if this drifts, the tooltip and the "
+                        + "underlying per-UUID image capacity get out of sync again.");
     }
 
     @Test

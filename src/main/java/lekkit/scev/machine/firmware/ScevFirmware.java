@@ -108,6 +108,29 @@ public interface ScevFirmware {
      */
     default @Nullable String cmdlineAppend() { return null; }
 
+    /**
+     * Does this firmware want {@link lekkit.scev.machine.MachineSpecParser}
+     * to inject {@code root=<dev> rw rootwait} into the kernel cmdline
+     * when a rootfs-declaring disk is also installed?
+     *
+     * <p>Firmwares that load their own kernel directly
+     * ({@link LinuxFirmware}) typically return {@code true}: the kernel
+     * reads the cmdline and (via its init / initramfs pivot script) mounts
+     * the declared root device as {@code /}. Firmwares that delegate boot
+     * to the disk's own bootloader ({@link OpenFirmware}/U-Boot) return
+     * {@code false} — the bootloader assembles the cmdline itself from
+     * {@code extlinux.conf} on disk, and our injection would be at best
+     * redundant and at worst conflict with it.
+     *
+     * <p>The parser's decision is <b>conjunctive</b>: both the firmware
+     * and the template must agree. See
+     * {@link lekkit.scev.machine.storage.ScevDiskTemplate#hasRootFilesystem()}.
+     *
+     * <p>Default is {@code false}. Firmwares without an attached rootfs
+     * (bare-metal blobs, bootrom-only flows) have no reason to opt in.
+     */
+    default boolean wantsNvmeRoot() { return false; }
+
     /** Human-readable name for tooltips, logs, and error messages. */
     Component displayName();
 

@@ -1531,6 +1531,373 @@ KernelStub.LOAD_ADDR + LINUX_MAGIC_OFFSET, expectedMagic.length);
         }
     }
 
+    // ======================================================================
+    //   Disk-persistence / swap contract — abstract refactor (no live OS)
+    // ======================================================================
+    //
+    // These tests exercise the mod-infrastructure layer of the disk
+    // persistence + swap abstraction: the per-UUID image file on disk must
+    // retain arbitrary bytes across power cycles, the STORAGE_UUID on the
+    // NVMe ItemStack must carry when the item moves between cases, and the
+    // parser must inject a root= cmdline when firmware and template metadata
+    // agree. All three operate at FileChannel / spec-object level — no guest
+    // boot needed, so they pass in headless CI regardless of kernel shipping.
+
+    /**
+     * Byte-level proof that NVMe images survive a power cycle.
+     *
+     * <p>Uses a blank {@code NvmeItem} (not preloaded) so
+     * {@link lekkit.scev.server.StorageManager#initImage} takes the
+     * sparse-create path — producing a 2048 MiB sparse file whose contents
+     * are zero-initialized. That lets us write a sentinel at offset 1 GiB
+     * (well past anywhere the guest could scribble during a short power
+     * cycle) without colliding with filesystem metadata.
+     *
+     * <p>Power-cycle pattern:
+     * <ol>
+     *   <li>First {@code powerOn}: parser allocates the stack's
+     *       {@link ScevDataComponents#STORAGE_UUID}, backend calls
+     *       {@code initImage} which creates the sparse image file.</li>
+     *   <li>{@code powerOff}: {@code machine.free()} tears down RVVM's NVMe
+     *       device, closing the file handle and flushing writes.</li>
+     *   <li>We write a 16-byte sentinel directly into the file via NIO —
+     *       no RVVM is holding the file, so this is straight Java I/O.</li>
+     *   <li>Second {@code powerOn}: RVVM reopens the same file by path.
+     *       The sentinel bytes are still in place; the guest never reaches
+     *       userspace before we {@code powerOff} again.</li>
+     *   <li>{@code powerOff}: machine tears down.</li>
+     *   <li>Re-read sentinel region, assert bytes still match.</li>
+     * </ol>
+     *
+     * <p>If this regresses, the likely culprits are: {@code initImage}
+     * losing its {@code !checkImage} guard (clobbering existing data),
+     * {@code createImage} truncating instead of sparsely extending, or
+     * {@code machine.free()} losing its flush ordering. All three are
+     * called out in {@code docs/GOTCHAS.md}.
+     */
+    @GameTest(templateNamespace = ScalarEvolution.MODID, template = "empty", timeoutTicks = 200)
+    public static void nvme_disk_bytes_persist_across_power_cycle(GameTestHelper helper) {
+        BlockPos pos = new BlockPos(1, 1, 1);
+        helper.setBlock(pos, ScevRegistry.WORKSTATION.get().defaultBlockState());
+        if (!(helper.getBlockEntity(pos) instanceof ComputerCaseBlockEntity case_)) {
+            helper.fail("Workstation BE not created"); return;
+        }
+
+        // Blank NVMe (not PRELOADED) — we want a sparse 2048 MiB file, not
+        // a 65 MiB template copy. Flash chip present for the Linux floor
+        // so the machine can actually power on, but the guest never gets
+        // far enough in the test to touch NVMe.
+        ItemStack mbStack = new ItemStack(ScevRegistry.MOTHERBOARD1.get());
+        MotherboardInventory inv = new MotherboardInventory(() -> mbStack);
+        inv.setItem(MotherboardItem.SLOT_CPU, new ItemStack(ScevRegistry.CPU1.get()));
+        inv.setItem(MotherboardItem.SLOT_FLASH, new ItemStack(ScevRegistry.FLASH_CHIP.get()));
+        inv.setItem(MotherboardItem.SLOT_RAM_START, new ItemStack(ScevRegistry.RAM_SODIMM1.get()));
+        inv.setItem(MotherboardItem.SLOT_NVME_START, new ItemStack(ScevRegistry.NVME.get()));
+        case_.setItem(0, mbStack);
+        case_.powerOn();
+
+        MachineState state = MachineManager.getMachineState(case_.getMachineUUID());
+        if (state == null) {
+            helper.fail("No MachineState after first powerOn — librvvm unavailable on this host?");
+            return;
+        }
+
+        // Read the allocated STORAGE_UUID off the (possibly mutated-by-parser)
+        // NVMe stack from inside the motherboard's persisted inventory. This
+        // is the same UUID the backend used to build the per-UUID image path.
+        ItemStack mbLive = case_.getItem(0);
+        MotherboardInventory liveInv = new MotherboardInventory(() -> mbLive);
+        ItemStack nvmeLive = liveInv.getItem(MotherboardItem.SLOT_NVME_START);
+        UUID diskUuid = nvmeLive.get(ScevDataComponents.STORAGE_UUID.get());
+        if (diskUuid == null) {
+            helper.fail("STORAGE_UUID wasn't allocated on the NVMe stack during powerOn — "
+                    + "parser's ensureUuid didn't run or wasn't written back into the motherboard "
+                    + "inventory. This is the same bug the StorageUuidTest + MachineSpecParserTest "
+                    + "guard; a GameTest-level failure here means the BE write-back path broke.");
+            case_.powerOff();
+            return;
+        }
+
+        // Sanity: the spec carries the same UUID.
+        MachineSpec spec = state.getBackend().spec();
+        if (spec.nvmeDrives().isEmpty() || !diskUuid.equals(spec.nvmeDrives().get(0).uuid())) {
+            helper.fail("Spec's NVMe UUID doesn't match the stack's STORAGE_UUID. Parser must "
+                    + "emit DiskSpec(uuid=ensureUuid(stack), ...) — see MachineSpecParser's "
+                    + "NVMe loop. Stack UUID: " + diskUuid + ", spec UUID: "
+                    + (spec.nvmeDrives().isEmpty() ? "(none)" : spec.nvmeDrives().get(0).uuid()));
+            case_.powerOff();
+            return;
+        }
+
+        case_.powerOff();
+
+        // Write a 16-byte sentinel well into the sparse file so no guest
+        // activity during the second power cycle could overwrite it. The
+        // file is 1 GiB (NvmeItem.SIZE_MB = 1024) — pick 512 MiB, safely
+        // inside the file bounds and far past anywhere the unmounted disk
+        // would receive ext4 metadata writes from the guest.
+        java.nio.file.Path imagePath = java.nio.file.Paths.get(
+                lekkit.scev.server.StorageManager.imagePath(diskUuid));
+        if (!java.nio.file.Files.isRegularFile(imagePath)) {
+            helper.fail("Expected image file at " + imagePath + " after first powerOn — "
+                    + "StorageManager.initImage didn't create it.");
+            return;
+        }
+        final long sentinelOffset = 512L << 20; // 512 MiB — inside the 1 GiB file
+        final byte[] sentinel = {
+                (byte) 0xDE, (byte) 0xAD, (byte) 0xBE, (byte) 0xEF,
+                (byte) 0xCA, (byte) 0xFE, (byte) 0xBA, (byte) 0xBE,
+                (byte) 0xFE, (byte) 0xED, (byte) 0xFA, (byte) 0xCE,
+                (byte) 0xF0, (byte) 0x0D, (byte) 0xBE, (byte) 0xEF,
+        };
+        long fileSizeBeforeWrite;
+        try (java.nio.channels.FileChannel ch = java.nio.channels.FileChannel.open(
+                imagePath,
+                java.nio.file.StandardOpenOption.WRITE,
+                java.nio.file.StandardOpenOption.READ)) {
+            fileSizeBeforeWrite = ch.size();
+            ch.position(sentinelOffset);
+            int written = ch.write(java.nio.ByteBuffer.wrap(sentinel));
+            if (written != sentinel.length) {
+                helper.fail("Short write to per-UUID image at offset " + sentinelOffset
+                        + ": wrote " + written + " of " + sentinel.length + " bytes.");
+                return;
+            }
+        } catch (java.io.IOException e) {
+            helper.fail("Could not open per-UUID image for writing at " + imagePath + ": " + e);
+            return;
+        }
+
+        // Second power cycle — RVVM reopens the file. Guest doesn't boot
+        // far enough to touch anywhere near offset 1 GiB.
+        case_.powerOn();
+        state = MachineManager.getMachineState(case_.getMachineUUID());
+        if (state == null) {
+            helper.fail("No MachineState after second powerOn — backend attach regressed.");
+            return;
+        }
+        case_.powerOff();
+
+        // Re-read sentinel + file size.
+        try (java.nio.channels.FileChannel ch = java.nio.channels.FileChannel.open(
+                imagePath, java.nio.file.StandardOpenOption.READ)) {
+            if (ch.size() != fileSizeBeforeWrite) {
+                helper.fail("Per-UUID image file size changed across power cycle: "
+                        + fileSizeBeforeWrite + " -> " + ch.size()
+                        + ". StorageManager.createImage must not truncate an existing image "
+                        + "(see docs/GOTCHAS.md 'FileChannel.truncate'). If initImage grew the "
+                        + "image to sizeMb on every powerOn we'd risk clobbering sparse tail data.");
+                return;
+            }
+            ch.position(sentinelOffset);
+            byte[] read = new byte[sentinel.length];
+            int n = ch.read(java.nio.ByteBuffer.wrap(read));
+            if (n != sentinel.length) {
+                helper.fail("Short read from per-UUID image at offset " + sentinelOffset
+                        + ": read " + n + " of " + sentinel.length + " bytes.");
+                return;
+            }
+            for (int i = 0; i < sentinel.length; i++) {
+                if (read[i] != sentinel[i]) {
+                    StringBuilder got = new StringBuilder();
+                    for (byte b : read) got.append(String.format("%02x", b & 0xFF));
+                    helper.fail("Sentinel byte " + i + " mismatch at offset " + sentinelOffset
+                            + ". Something cleared or re-seeded the image during the second "
+                            + "power cycle — likely suspects: initImage's !checkImage guard was "
+                            + "removed (letting copyImage clobber existing data), or the backend "
+                            + "added an explicit truncate. Got: " + got);
+                    return;
+                }
+            }
+        } catch (java.io.IOException e) {
+            helper.fail("Could not re-read per-UUID image: " + e);
+            return;
+        }
+
+        helper.succeed();
+    }
+
+    /**
+     * The swap contract: an NVMe stack carries its {@code STORAGE_UUID} from
+     * one computer case to another, and the per-world image file follows.
+     *
+     * <p>Two workstations, each with their own motherboard. Install an NVMe
+     * in A's motherboard, power on (allocates UUID, creates image file),
+     * power off, then pull the NVMe stack out of A's motherboard and insert
+     * it into B's. Power on B: the parser reads the same UUID from the
+     * stack's data component and emits a {@code DiskSpec} pointing at the
+     * same per-UUID image file. That's the whole swap invariant.
+     *
+     * <p>If this regresses, STORAGE_UUID isn't surviving an ItemStack move
+     * between containers (unit-tested by {@code StorageUuidTest}) OR the
+     * parser isn't rehydrating from the existing UUID on a re-attach.
+     */
+    @GameTest(templateNamespace = ScalarEvolution.MODID, template = "empty", timeoutTicks = 200)
+    public static void nvme_disk_moves_between_cases(GameTestHelper helper) {
+        BlockPos posA = new BlockPos(1, 1, 1);
+        BlockPos posB = new BlockPos(3, 1, 1);
+        helper.setBlock(posA, ScevRegistry.WORKSTATION.get().defaultBlockState());
+        helper.setBlock(posB, ScevRegistry.WORKSTATION.get().defaultBlockState());
+        if (!(helper.getBlockEntity(posA) instanceof ComputerCaseBlockEntity caseA)
+                || !(helper.getBlockEntity(posB) instanceof ComputerCaseBlockEntity caseB)) {
+            helper.fail("Workstation BEs not created at both positions");
+            return;
+        }
+
+        // Motherboard A: CPU + flash + RAM + blank NVMe.
+        ItemStack mbA = new ItemStack(ScevRegistry.MOTHERBOARD1.get());
+        MotherboardInventory invA = new MotherboardInventory(() -> mbA);
+        invA.setItem(MotherboardItem.SLOT_CPU, new ItemStack(ScevRegistry.CPU1.get()));
+        invA.setItem(MotherboardItem.SLOT_FLASH, new ItemStack(ScevRegistry.FLASH_CHIP.get()));
+        invA.setItem(MotherboardItem.SLOT_RAM_START, new ItemStack(ScevRegistry.RAM_SODIMM1.get()));
+        invA.setItem(MotherboardItem.SLOT_NVME_START, new ItemStack(ScevRegistry.NVME.get()));
+        caseA.setItem(0, mbA);
+
+        // Motherboard B: same shape but no NVMe yet — we're going to move
+        // A's NVMe into this slot.
+        ItemStack mbB = new ItemStack(ScevRegistry.MOTHERBOARD1.get());
+        MotherboardInventory invB = new MotherboardInventory(() -> mbB);
+        invB.setItem(MotherboardItem.SLOT_CPU, new ItemStack(ScevRegistry.CPU1.get()));
+        invB.setItem(MotherboardItem.SLOT_FLASH, new ItemStack(ScevRegistry.FLASH_CHIP.get()));
+        invB.setItem(MotherboardItem.SLOT_RAM_START, new ItemStack(ScevRegistry.RAM_SODIMM1.get()));
+        caseB.setItem(0, mbB);
+
+        // Power A on → allocates STORAGE_UUID + creates image.
+        caseA.powerOn();
+        if (MachineManager.getMachineState(caseA.getMachineUUID()) == null) {
+            helper.fail("No MachineState for case A after powerOn"); return;
+        }
+        // Read allocated UUID from the live motherboard stack.
+        ItemStack mbALive = caseA.getItem(0);
+        MotherboardInventory invALive = new MotherboardInventory(() -> mbALive);
+        ItemStack nvmeInA = invALive.getItem(MotherboardItem.SLOT_NVME_START);
+        UUID diskUuid = nvmeInA.get(ScevDataComponents.STORAGE_UUID.get());
+        if (diskUuid == null) {
+            helper.fail("STORAGE_UUID not allocated on the NVMe stack after powerOn");
+            caseA.powerOff();
+            return;
+        }
+        caseA.powerOff();
+
+        // Snapshot the path the image lives at (in case StorageManager's
+        // root path resolution ever becomes NVMe-dependent).
+        String imagePathA = lekkit.scev.server.StorageManager.imagePath(diskUuid);
+
+        // Swap: remove NVMe stack from A, install in B. Uses
+        // MotherboardInventory.setItem which writes back through the
+        // MOTHERBOARD_INVENTORY data component. The stack we install in
+        // B MUST retain the STORAGE_UUID — that's the whole point.
+        ItemStack pulled = invALive.getItem(MotherboardItem.SLOT_NVME_START).copy();
+        if (pulled.get(ScevDataComponents.STORAGE_UUID.get()) == null
+                || !pulled.get(ScevDataComponents.STORAGE_UUID.get()).equals(diskUuid)) {
+            helper.fail("STORAGE_UUID didn't survive ItemStack.copy() — that's the invariant "
+                    + "StorageUuidTest pins. A regression here would break every swap.");
+            return;
+        }
+        invALive.setItem(MotherboardItem.SLOT_NVME_START, ItemStack.EMPTY);
+        caseA.setChanged();
+
+        ItemStack mbBLive = caseB.getItem(0);
+        MotherboardInventory invBLive = new MotherboardInventory(() -> mbBLive);
+        invBLive.setItem(MotherboardItem.SLOT_NVME_START, pulled);
+        caseB.setChanged();
+
+        // Power B on. The parser should rehydrate the same UUID and emit a
+        // DiskSpec pointing at the existing image file. ensureUuid is a
+        // no-op when the stack already has a UUID (see StorageUuidTest).
+        caseB.powerOn();
+        MachineState stateB = MachineManager.getMachineState(caseB.getMachineUUID());
+        if (stateB == null) {
+            helper.fail("No MachineState for case B after powerOn"); return;
+        }
+        try {
+            MachineSpec specB = stateB.getBackend().spec();
+            if (specB.nvmeDrives().isEmpty()) {
+                helper.fail("Case B spec has no NVMe drives — the moved stack wasn't seen by "
+                        + "the parser. MotherboardInventory writeback regressed?");
+                return;
+            }
+            MachineSpec.DiskSpec d = specB.nvmeDrives().get(0);
+            if (!diskUuid.equals(d.uuid())) {
+                helper.fail("Case B's NVMe UUID doesn't match case A's. Swap broke: the same "
+                        + "stack produced a different UUID, which means ensureUuid overwrote "
+                        + "an existing STORAGE_UUID. Got " + d.uuid() + ", expected "
+                        + diskUuid);
+                return;
+            }
+            // Same UUID => same per-world image path => swap preserves content.
+            String imagePathB = lekkit.scev.server.StorageManager.imagePath(diskUuid);
+            if (!imagePathA.equals(imagePathB)) {
+                helper.fail("StorageManager.imagePath changed across the swap (A="
+                        + imagePathA + " vs B=" + imagePathB + "). The per-UUID path "
+                        + "scheme must be stable so a stack carries its bytes.");
+                return;
+            }
+            helper.succeed();
+        } finally {
+            caseB.powerOff();
+        }
+    }
+
+    /**
+     * The cmdline-assembly contract at the BE level: with
+     * {@link lekkit.scev.machine.firmware.LinuxFirmware}'s
+     * {@code wantsNvmeRoot=true} and
+     * {@link lekkit.scev.machine.storage.AlpineDiskTemplate}'s
+     * {@code hasRootFilesystem=true} + {@code rootDevice="/dev/nvme0n1p1"},
+     * the backend-visible {@link MachineSpec#cmdline()} contains
+     * {@code "root=/dev/nvme0n1p1 rw rootwait"}.
+     *
+     * <p>Parallel to {@code MachineSpecParserTest.cmdlineIncludesRootWhenLinuxFirmwareSeesAlpineDisk}
+     * but exercises the full case → parser → backend → spec round trip so a
+     * future regression in the BE's {@code buildMachine} (e.g. rebuilding
+     * the spec with different metadata) is caught at integration level too.
+     *
+     * <p>Device is {@code p1} because the shipped preloaded NVMe defaults
+     * to the Alpine template, which is MBR-partitioned; the Buildroot
+     * initramfs {@code /init} reads root= off {@code /proc/cmdline} and
+     * mounts that partition directly. A regression to the whole-disk
+     * device would silently land the player in the initramfs fallback
+     * — no longer seeing the real Alpine rootfs.
+     */
+    @GameTest(templateNamespace = ScalarEvolution.MODID, template = "empty", timeoutTicks = 100)
+    public static void parser_emits_root_cmdline_with_linux_firmware_and_rootfs_template(
+            GameTestHelper helper) {
+        BlockPos pos = new BlockPos(1, 1, 1);
+        helper.setBlock(pos, ScevRegistry.WORKSTATION.get().defaultBlockState());
+        if (!(helper.getBlockEntity(pos) instanceof ComputerCaseBlockEntity case_)) {
+            helper.fail("Workstation BE not created"); return;
+        }
+
+        ItemStack mbStack = new ItemStack(ScevRegistry.MOTHERBOARD1.get());
+        MotherboardInventory inv = new MotherboardInventory(() -> mbStack);
+        inv.setItem(MotherboardItem.SLOT_CPU, new ItemStack(ScevRegistry.CPU1.get()));
+        inv.setItem(MotherboardItem.SLOT_FLASH, new ItemStack(ScevRegistry.FLASH_CHIP.get()));
+        inv.setItem(MotherboardItem.SLOT_RAM_START, new ItemStack(ScevRegistry.RAM_SODIMM1.get()));
+        inv.setItem(MotherboardItem.SLOT_NVME_START, new ItemStack(ScevRegistry.NVME_PRELOADED.get()));
+        case_.setItem(0, mbStack);
+        case_.powerOn();
+        try {
+            MachineState state = MachineManager.getMachineState(case_.getMachineUUID());
+            if (state == null) {
+                helper.fail("No MachineState after powerOn"); return;
+            }
+            String cmdline = state.getBackend().spec().cmdline();
+            if (!cmdline.contains("root=/dev/nvme0n1p1 rw rootwait")) {
+                helper.fail("Backend-visible cmdline doesn't contain the expected "
+                        + "'root=/dev/nvme0n1p1 rw rootwait' fragment. LinuxFirmware declares "
+                        + "wantsNvmeRoot=true and the default preloaded NVMe (Alpine) declares "
+                        + "hasRootFilesystem=true with rootDevice=/dev/nvme0n1p1 (MBR layout). "
+                        + "The parser must inject that per-template device. "
+                        + "Got: '" + cmdline + "'");
+                return;
+            }
+            helper.succeed();
+        } finally {
+            case_.powerOff();
+        }
+    }
+
     /** Offset of the RV64 Linux boot header magic ("RISCV\\0\\0\\0") inside Image. */
     private static final int LINUX_MAGIC_OFFSET = 48;
 
@@ -1764,6 +2131,240 @@ KernelStub.LOAD_ADDR + LINUX_MAGIC_OFFSET, expectedMagic.length);
             return;
         }
         helper.succeed();
+    }
+
+    /**
+     * End-to-end network test: boots Alpine (via OpenFirmware/U-Boot
+     * extlinux) with an RTL8169 NIC and waits for dhcpcd to complete a
+     * DHCP lease against RVVM's user-mode gateway.
+     *
+     * <p>This catches two distinct classes of regression that can each
+     * silently break in-game networking:
+     *
+     * <ol>
+     *   <li><b>RVVM user-mode ARP handler replying to DAD probes.</b>
+     *       dhcpcd (RFC 5227) sends an ARP-who-has for the offered IP
+     *       with {@code sender_ip = 0.0.0.0}. If the gateway replies,
+     *       dhcpcd flags a duplicate-address conflict, aborts the
+     *       lease, and re-solicits forever. Fixed upstream in
+     *       {@code rvvm/src/devices/tap_user.c} by filtering
+     *       {@code sender_ip == 0.0.0.0} out of the reply path; this
+     *       test would catch a revert.</li>
+     *   <li><b>Guest-side kernel driver or service regression.</b> If
+     *       {@code CONFIG_R8169} stops being built-in, or the
+     *       {@code dhcpcd} OpenRC service gets dropped from the default
+     *       runlevel, the interface never comes up and no DHCP traffic
+     *       ever flows. The test sees no {@code eth0:} lines and fails.</li>
+     * </ol>
+     *
+     * <p>Success marker: the kernel console tail contains a
+     * {@code "eth0: leased"} line (dhcpcd's "lease acquired" log).
+     *
+     * <p>Failure markers: repeated {@code "DAD detected"} (the loop
+     * symptom), or a {@code soliciting} count that climbs without a
+     * matching {@code leased} line before the wall-clock deadline.
+     *
+     * <p>The test uses OpenFirmware (U-Boot) as the flash firmware so
+     * the Alpine image's own kernel + dhcpcd userspace runs — that's
+     * the only pairing where eth0/DHCP are exercised today (the
+     * Buildroot initramfs path doesn't ship a DHCP client).
+     *
+     * <p>Budget: 120 real seconds. Alpine on a 256 MiB VM takes ~30 s
+     * to reach userspace, ~10 s for openrc to progress to the default
+     * runlevel, ~2 s for DHCP. 120 s gives headroom plus a chance to
+     * catch a hung boot.
+     *
+     * <p>{@code timeoutTicks} is sized against the gametest server's
+     * observed rate (~12500 TPS on macOS here, vs the standard 20 TPS
+     * in-game). The VM runs on its own native thread at real time, so
+     * the tick budget has to cover the VM's real-time boot budget.
+     * Each {@link #pollForDhcpLease} iteration sleeps ~100 ms via
+     * {@link Thread#sleep} between checks to let the guest accumulate
+     * output without consuming gametest ticks — the server tick
+     * counter advances only WHILE we aren't blocking the server
+     * thread, so the tick budget is dominated by the non-blocking
+     * part (the 20-tick runAfterDelay between polls).
+     *
+     * <p>Budget math: ~1200 polls across 120 s wall time (100 ms
+     * sleep each) × 20 ticks per poll = 24 000 ticks. 200 000 gives
+     * comfortable headroom if server TPS spikes.
+     */
+    @GameTest(templateNamespace = ScalarEvolution.MODID, template = "empty", timeoutTicks = 200_000)
+    public static void alpine_dhcp_lease_completes(GameTestHelper helper) {
+        BlockPos pos = new BlockPos(1, 1, 1);
+        helper.setBlock(pos, ScevRegistry.WORKSTATION.get().defaultBlockState());
+        if (!(helper.getBlockEntity(pos) instanceof ComputerCaseBlockEntity case_)) {
+            helper.fail("Workstation BE not created"); return;
+        }
+
+        // Build an Alpine machine: MOTHERBOARD3 for enough PCI slots,
+        // CPU3 for smp, RAM_SODIMM4 for enough for Linux floor, flash
+        // chip stamped with OPEN_FIRMWARE (U-Boot reads extlinux.conf
+        // from the Alpine disk and boots Alpine's own kernel), the
+        // preloaded Alpine NVMe, and an RTL8169 network card.
+        ItemStack flash = new ItemStack(ScevRegistry.FLASH_CHIP.get());
+        flash.set(ScevDataComponents.FIRMWARE_ID_OVERRIDE.get(), FirmwareRegistry.OPEN_FIRMWARE);
+
+        ItemStack mbStack = new ItemStack(ScevRegistry.MOTHERBOARD3.get());
+        MotherboardInventory inv = new MotherboardInventory(() -> mbStack);
+        inv.setItem(MotherboardItem.SLOT_CPU, new ItemStack(ScevRegistry.CPU3.get()));
+        inv.setItem(MotherboardItem.SLOT_FLASH, flash);
+        inv.setItem(MotherboardItem.SLOT_RAM_START, new ItemStack(ScevRegistry.RAM_SODIMM4.get()));
+        inv.setItem(MotherboardItem.SLOT_RAM_START + 1, new ItemStack(ScevRegistry.RAM_SODIMM4.get()));
+        inv.setItem(MotherboardItem.SLOT_NVME_START, new ItemStack(ScevRegistry.NVME_PRELOADED.get()));
+        inv.setItem(MotherboardItem.SLOT_PCI_START, new ItemStack(ScevRegistry.RTL8169.get()));
+        case_.setItem(0, mbStack);
+        case_.powerOn();
+
+        UUID machineUuid = case_.getMachineUUID();
+        MachineState state = MachineManager.getMachineState(machineUuid);
+        if (state == null) {
+            helper.fail("No MachineState after powerOn — librvvm unavailable on this host?");
+            return;
+        }
+        if (!state.getBackend().spec().hasNic()) {
+            helper.fail("Spec says hasNic=false despite RTL8169 installed — "
+                    + "MachineSpecParser's PCI dispatch regressed");
+            case_.powerOff();
+            return;
+        }
+
+        long deadlineMs = System.currentTimeMillis() + 120_000;
+        pollForDhcpLease(helper, case_, machineUuid, deadlineMs);
+    }
+
+    private static void pollForDhcpLease(GameTestHelper helper,
+                                         ComputerCaseBlockEntity case_,
+                                         UUID machineUuid,
+                                         long deadlineMs) {
+        // Inside each poll we briefly block the server thread so
+        // wall-clock time passes without burning the gametest tick
+        // budget. The machine runs on its own native thread at real
+        // time regardless of what the server thread is doing, so
+        // sleeping here is how we let the guest make progress.
+        //
+        // Note: GOTCHAS.md warns against long Thread.sleep in
+        // GameTests because it starves *other* server-tick
+        // subscribers. That caveat applies when multiple things
+        // need ticks to make progress (e.g. SoundStreamManager's
+        // polling loop). For this test only the machine's own thread
+        // matters; the kernel console ring empties on the NEXT
+        // server tick after we return, so a short (≤100 ms) sleep
+        // is fine. Don't copy this pattern to tests that depend on
+        // frequent server-tick draining.
+        try {
+            Thread.sleep(100);
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+        }
+
+        lekkit.scev.rpc.ScevRpcManager mgr = lekkit.scev.rpc.ScevRpcManager.get(machineUuid);
+        if (mgr == null) {
+            helper.fail("ScevRpcManager for " + machineUuid + " disappeared mid-boot");
+            case_.powerOff();
+            return;
+        }
+
+        java.util.List<String> tail = mgr.kernelConsoleTail();
+        int dadCount = 0;
+        int solicitCount = 0;
+        boolean leased = false;
+        boolean noLease = false;
+        String netcheckLine = null;
+        for (String line : tail) {
+            if (line.contains("DAD detected")) dadCount++;
+            if (line.contains("soliciting a DHCP lease")) solicitCount++;
+            // Deterministic success marker emitted by
+            // /etc/local.d/scev-netcheck.start in the Alpine image.
+            // That script polls `ip addr show eth0` for up to 30 s
+            // and echoes the outcome to /dev/console.
+            if (line.contains("[scev-netcheck] eth0: leased ")) {
+                leased = true;
+                netcheckLine = line;
+            }
+            if (line.contains("[scev-netcheck] eth0: no lease after")) {
+                noLease = true;
+                netcheckLine = line;
+            }
+        }
+
+        if (leased) {
+            // Sanity-check the advertised IP matches RVVM's DHCP
+            // server (192.168.0.100/24). Future-proofs against a
+            // regression where dhcpcd grabs a link-local or
+            // fallback address instead of the RVVM lease.
+            if (netcheckLine != null && !netcheckLine.contains("192.168.0.100")) {
+                helper.fail("eth0 got a lease but not 192.168.0.100 as expected: "
+                        + netcheckLine + ". RVVM's tap_user.c hands out this specific "
+                        + "address; if it changed, update the test.");
+                case_.powerOff();
+                return;
+            }
+            helper.succeed();
+            case_.powerOff();
+            return;
+        }
+
+        if (noLease) {
+            helper.fail("Guest reported no DHCP lease after 30 s of polling on eth0. "
+                    + "Marker: " + netcheckLine + ". DAD=" + dadCount + ", solicit=" + solicitCount
+                    + ". Most likely causes: (1) RVVM's tap_user.c ARP handler regressed and is "
+                    + "replying to DAD probes; (2) R8169 driver failed to bind to the PCI NIC "
+                    + "(check for 'r8169 0000:00:02.0 eth0' in kernel dmesg); (3) dhcpcd service "
+                    + "not in the default runlevel. Tail:" + formatTail(tail));
+            case_.powerOff();
+            return;
+        }
+
+        // DAD loop detector: two or more "DAD detected" lines means we
+        // cycled through solicit / offer / probe / conflict at least
+        // twice — the failure mode the RVVM fix addresses. One probe
+        // can legitimately fire (though after the fix, even that
+        // shouldn't see a reply), so we only fail on 2+.
+        if (dadCount >= 2) {
+            helper.fail("DHCP DAD loop detected (" + dadCount + " 'DAD detected' lines, "
+                    + solicitCount + " 'soliciting' lines in last " + tail.size() + " kernel-console "
+                    + "lines). RVVM's tap_user.c handle_arp must be replying to ARP probes "
+                    + "(sender_ip = 0.0.0.0); see the rebuilt librvvm, and/or the depmod / "
+                    + "R8169 configuration regressed on the Alpine side. Tail: " + formatTail(tail));
+            case_.powerOff();
+            return;
+        }
+
+        if (System.currentTimeMillis() >= deadlineMs) {
+            helper.fail("120s deadline reached without a DHCP lease. Kernel console tail size = "
+                    + tail.size() + "; DAD=" + dadCount + ", solicit=" + solicitCount + ", leased="
+                    + leased + ". If tail is empty, the guest never got far enough to print "
+                    + "anything — check kernel boot (serial console routing, initramfs). "
+                    + "Tail: " + formatTail(tail));
+            case_.powerOff();
+            return;
+        }
+
+        // Poll every 20 ticks — enough to pick up new console lines as
+        // they arrive but cheap enough that we don't burn the gametest
+        // tick budget. Kernel console drains on every server tick
+        // regardless of this delay; this just paces our inspection.
+        helper.runAfterDelay(20,
+                () -> pollForDhcpLease(helper, case_, machineUuid, deadlineMs));
+    }
+
+    /**
+     * Condense a kernel-console tail into a short diagnostic snippet
+     * for test failure messages. Deliberately small (last 10 lines):
+     * {@code helper.fail} round-trips the message through a
+     * {@code writable_book} page, which has a ~1 KB content cap —
+     * dumping the full 256-line tail overflows and the error itself
+     * stops rendering.
+     */
+    private static String formatTail(java.util.List<String> tail) {
+        int n = Math.min(tail.size(), 10);
+        if (n == 0) return " (empty)";
+        StringBuilder sb = new StringBuilder(" last ").append(n).append(" lines: ");
+        for (int i = tail.size() - n; i < tail.size(); i++) {
+            sb.append('|').append(tail.get(i));
+        }
+        return sb.toString();
     }
 
     private ScevGameTests() {}

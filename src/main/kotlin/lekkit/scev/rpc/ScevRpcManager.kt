@@ -81,6 +81,20 @@ class ScevRpcManager private constructor(
     private var kernelConsoleLineLen = 0
 
     /**
+     * Bounded ring buffer of the last [KERNEL_CONSOLE_TAIL] guest-
+     * console lines, populated by [drainKernelConsole]. Exposed via
+     * [kernelConsoleTail] so tests (and eventually in-game diagnostics)
+     * can inspect recent boot output without scraping SLF4J log files.
+     *
+     * Synchronized by the server thread: both the writer (server tick
+     * calling [tick]) and typical readers (GameTests running on the
+     * server thread) are serialized by Minecraft's tick loop. If a
+     * non-server-thread reader ever appears, wrap the accessor in a
+     * copy-under-lock.
+     */
+    private val kernelConsoleTailBuf: ArrayDeque<String> = ArrayDeque(KERNEL_CONSOLE_TAIL)
+
+    /**
      * Per-machine [SupervisorJob] parented to [ServerScope.scope]'s
      * job. Cancelling this job:
      *   - stops this machine's in-flight handler coroutines
@@ -118,6 +132,18 @@ class ScevRpcManager private constructor(
     fun attachKernelConsole(console: SerialDevice) {
         this.kernelConsole = console
     }
+
+    /**
+     * Snapshot of the last [KERNEL_CONSOLE_TAIL] guest-console lines
+     * seen by [drainKernelConsole], oldest first. Returns an empty list
+     * if no console is attached or nothing has been logged.
+     *
+     * Intended for integration tests and future diagnostics overlays
+     * that need to inspect recent boot output synchronously. Not a
+     * substitute for real log capture — lines dropped here stay in the
+     * SLF4J log regardless.
+     */
+    fun kernelConsoleTail(): List<String> = kernelConsoleTailBuf.toList()
 
     /**
      * Queue an event for the guest. Safe to call from any thread —
@@ -173,6 +199,10 @@ class ScevRpcManager private constructor(
                     if (kernelConsoleLineLen > 0) {
                         val line = String(kernelConsoleLine, 0, kernelConsoleLineLen, StandardCharsets.UTF_8)
                         LOG.debug("[scev-kernel {}] {}", machineUuid, line)
+                        if (kernelConsoleTailBuf.size == KERNEL_CONSOLE_TAIL) {
+                            kernelConsoleTailBuf.removeFirst()
+                        }
+                        kernelConsoleTailBuf.addLast(line)
                         kernelConsoleLineLen = 0
                     }
                 } else if (b != '\r'.code.toByte()) {
@@ -257,6 +287,16 @@ class ScevRpcManager private constructor(
 
         /** Scratch buffer size for draining serial TX per tick. */
         private const val DRAIN_CHUNK = 4096
+
+        /**
+         * Max number of kernel-console lines retained in [kernelConsoleTailBuf].
+         * 256 covers boot plus a few seconds of post-boot chatter — enough
+         * for integration tests to look for DHCP lease completion / udev
+         * messages without inflating server heap by a meaningful amount
+         * (each line is < 512 bytes by construction, so ~128 KB total per
+         * machine worst-case).
+         */
+        private const val KERNEL_CONSOLE_TAIL = 256
 
         private val MANAGERS = ConcurrentHashMap<UUID, ScevRpcManager>()
 

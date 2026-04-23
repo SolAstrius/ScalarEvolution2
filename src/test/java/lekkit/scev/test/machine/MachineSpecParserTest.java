@@ -340,7 +340,9 @@ class MachineSpecParserTest {
         mb.setItem(MotherboardItem.SLOT_NVME_START + 1, new ItemStack(ScevRegistry.NVME.get()));
         MachineSpec spec = MachineSpecParser.fromMotherboard(UUID.randomUUID(), mbStack, false);
         assertEquals(2, spec.nvmeDrives().size());
-        for (var d : spec.nvmeDrives()) assertEquals(2048, d.sizeMb());
+        for (var d : spec.nvmeDrives()) assertEquals(
+                lekkit.scev.items.NvmeItem.SIZE_MB, d.sizeMb(),
+                "Blank NvmeItem sizeMb must propagate to the DiskSpec unchanged.");
     }
 
     @Test
@@ -514,6 +516,134 @@ class MachineSpecParserTest {
         assertNull(fw.firmwareId(),
                 "When rawBytes wins, the id path must not also be emitted — otherwise "
                         + "the backend has to untangle which one is 'real'");
+    }
+
+    // -- Cmdline assembly via ScevDiskTemplate × ScevFirmware abstraction ----
+    //
+    // root=<dev> rw rootwait is injected iff BOTH sides opt in:
+    //   * template.hasRootFilesystem()     (disk side)
+    //   * firmware.wantsNvmeRoot()         (firmware side)
+    // Either missing -> cmdline stays empty (the parser's new default).
+
+    @Test
+    @DisplayName("LINUX firmware + Alpine preloaded NVMe -> cmdline root=/dev/nvme0n1p1 (MBR layout)")
+    void cmdlineIncludesRootWhenLinuxFirmwareSeesAlpineDisk() {
+        // LINUX firmware declares wantsNvmeRoot()=true. The shipped
+        // NVME_PRELOADED's default template is ALPINE which declares
+        // hasRootFilesystem()=true AND rootDevice()="/dev/nvme0n1p1"
+        // (MBR-wrapped single partition — see scev-alpine's
+        // build-nvme-sysinstall.sh). The conjunction holds, so the parser
+        // emits the per-template rootDevice() into the cmdline — NOT the
+        // interface default /dev/nvme0n1. Using the whole-disk device
+        // against Alpine would fail: the MBR header isn't an ext4 super-
+        // block, so the kernel mount silently fails and /init falls
+        // through to initramfs userspace instead of the real Alpine rootfs.
+        ItemStack mbStack = new ItemStack(ScevRegistry.MOTHERBOARD1.get());
+        MotherboardInventory mb = new MotherboardInventory(() -> mbStack);
+        mb.setItem(MotherboardItem.SLOT_FLASH, new ItemStack(ScevRegistry.FLASH_CHIP.get()));
+        mb.setItem(MotherboardItem.SLOT_NVME_START, new ItemStack(ScevRegistry.NVME_PRELOADED.get()));
+
+        MachineSpec spec = MachineSpecParser.fromMotherboard(UUID.randomUUID(), mbStack, false);
+        assertNotNull(spec);
+        assertEquals("root=/dev/nvme0n1p1 rw rootwait", spec.cmdline(),
+                "Conjunction of firmware.wantsNvmeRoot() and template.hasRootFilesystem() "
+                        + "must inject `root=<template.rootDevice()> rw rootwait`. For the default "
+                        + "preloaded NVMe (Alpine, MBR-wrapped) that's p1 — regressing to "
+                        + "/dev/nvme0n1 would mount the MBR header as a filesystem and silently "
+                        + "fall back to initramfs userspace.");
+    }
+
+    @Test
+    @DisplayName("LINUX firmware + Buildroot-template NVMe -> cmdline root=/dev/nvme0n1 (raw ext)")
+    void cmdlineUsesRawDeviceForBuildrootTemplate() {
+        // Same shape as the Alpine test, but the NVMe's DISK_TEMPLATE
+        // data component pins BuildrootDiskTemplate — a raw ext filesystem
+        // at the whole device (genext2fs output, no MBR). The parser
+        // emits the template's own rootDevice() into the cmdline, which
+        // is /dev/nvme0n1 for this template. This is the pairing the
+        // Buildroot kernel's /init pivot script historically hardcoded;
+        // the cmdline-driven path is the generalization.
+        ItemStack nvme = new ItemStack(ScevRegistry.NVME_PRELOADED.get());
+        nvme.set(ScevDataComponents.DISK_TEMPLATE.get(), DiskTemplateRegistry.BUILDROOT);
+
+        ItemStack mbStack = new ItemStack(ScevRegistry.MOTHERBOARD1.get());
+        MotherboardInventory mb = new MotherboardInventory(() -> mbStack);
+        mb.setItem(MotherboardItem.SLOT_FLASH, new ItemStack(ScevRegistry.FLASH_CHIP.get()));
+        mb.setItem(MotherboardItem.SLOT_NVME_START, nvme);
+
+        MachineSpec spec = MachineSpecParser.fromMotherboard(UUID.randomUUID(), mbStack, false);
+        assertNotNull(spec);
+        assertEquals("root=/dev/nvme0n1 rw rootwait", spec.cmdline(),
+                "Buildroot template's rootDevice() is /dev/nvme0n1 (raw ext, no MBR). "
+                        + "The parser must honor per-template devices — hardcoding one path here "
+                        + "would force one template's layout assumption onto the other.");
+    }
+
+    @Test
+    @DisplayName("LINUX firmware + blank NVMe -> cmdline does NOT include root= (no template metadata)")
+    void cmdlineOmitsRootWhenDiskIsNotRootfs() {
+        // Blank NvmeItem has no templateId — the parser's metadata lookup
+        // returns null, so hasRootFilesystem() never gets called and the
+        // root= injection is skipped. The spec should hold the empty
+        // DEFAULT_CMDLINE.
+        ItemStack mbStack = new ItemStack(ScevRegistry.MOTHERBOARD1.get());
+        MotherboardInventory mb = new MotherboardInventory(() -> mbStack);
+        mb.setItem(MotherboardItem.SLOT_FLASH, new ItemStack(ScevRegistry.FLASH_CHIP.get()));
+        mb.setItem(MotherboardItem.SLOT_NVME_START, new ItemStack(ScevRegistry.NVME.get()));
+
+        MachineSpec spec = MachineSpecParser.fromMotherboard(UUID.randomUUID(), mbStack, false);
+        assertNotNull(spec);
+        assertFalse(spec.cmdline().contains("root="),
+                "A blank NvmeItem has no template metadata — the parser must NOT inject a "
+                        + "root= cmdline, because there's nothing to point at (the image may "
+                        + "have no filesystem at all). Got: '" + spec.cmdline() + "'");
+        assertEquals(MachineSpecParser.DEFAULT_CMDLINE, spec.cmdline(),
+                "Without an opt-in disk the cmdline is exactly DEFAULT_CMDLINE (currently empty).");
+    }
+
+    @Test
+    @DisplayName("OPEN_FIRMWARE flash + rootfs NVMe -> cmdline does NOT include root= (U-Boot path)")
+    void cmdlineOmitsRootForOpenFirmware() {
+        // OpenFirmware declares wantsNvmeRoot()=false — U-Boot reads
+        // extlinux.conf off the disk and sets its own root=. A Java-side
+        // injection would at best duplicate and at worst conflict. We
+        // pin the flash chip to the OPEN_FIRMWARE registry id via the
+        // FIRMWARE_ID_OVERRIDE data component so we don't depend on the
+        // typed FlashFirmware enum including OPEN_FIRMWARE.
+        ItemStack flash = new ItemStack(ScevRegistry.FLASH_CHIP.get());
+        flash.set(ScevDataComponents.FIRMWARE_ID_OVERRIDE.get(), FirmwareRegistry.OPEN_FIRMWARE);
+
+        ItemStack mbStack = new ItemStack(ScevRegistry.MOTHERBOARD1.get());
+        MotherboardInventory mb = new MotherboardInventory(() -> mbStack);
+        mb.setItem(MotherboardItem.SLOT_FLASH, flash);
+        mb.setItem(MotherboardItem.SLOT_NVME_START, new ItemStack(ScevRegistry.NVME_PRELOADED.get()));
+
+        MachineSpec spec = MachineSpecParser.fromMotherboard(UUID.randomUUID(), mbStack, false);
+        assertNotNull(spec);
+        assertEquals(FirmwareRegistry.OPEN_FIRMWARE, spec.firmware().firmwareId(),
+                "Setup sanity — the OVERRIDE data component must point at OPEN_FIRMWARE");
+        assertFalse(spec.cmdline().contains("root="),
+                "OpenFirmware/U-Boot must not receive a Java-side root= fragment; "
+                        + "the on-disk extlinux.conf supplies it. Got: '" + spec.cmdline() + "'");
+    }
+
+    @Test
+    @DisplayName("No flash chip + rootfs NVMe -> cmdline does NOT include root= (no firmware to opt in)")
+    void cmdlineOmitsRootWithNoFlash() {
+        // The conjunction requires a firmware — if no flash chip is
+        // installed the firmware resolution yields null, skipping the
+        // root= branch entirely. Guards the code path that dereferences
+        // firmwareId inside the final cmdline assembly.
+        ItemStack mbStack = new ItemStack(ScevRegistry.MOTHERBOARD1.get());
+        new MotherboardInventory(() -> mbStack)
+                .setItem(MotherboardItem.SLOT_NVME_START, new ItemStack(ScevRegistry.NVME_PRELOADED.get()));
+
+        MachineSpec spec = MachineSpecParser.fromMotherboard(UUID.randomUUID(), mbStack, false);
+        assertNotNull(spec);
+        assertFalse(spec.hasFirmware(), "Sanity — no flash chip means no firmware");
+        assertFalse(spec.cmdline().contains("root="),
+                "Without a firmware to opt in, the parser can't know what kernel is being "
+                        + "loaded (if any). Skip root= entirely. Got: '" + spec.cmdline() + "'");
     }
 
     @Test

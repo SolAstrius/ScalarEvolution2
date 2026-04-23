@@ -233,7 +233,18 @@ public record MachineSpec(
         private boolean hasGpio;
         private boolean hasSound;
         private final List<DiskSpec> nvmeDrives = new ArrayList<>();
-        private String cmdline = "root=/dev/nvme0n1 rw";
+        /**
+         * Default cmdline is empty. A previous default of
+         * {@code "root=/dev/nvme0n1 rw"} was benign only because Linux
+         * ignored {@code root=} when an initramfs was the rootfs — with the
+         * {@link lekkit.scev.machine.storage.ScevDiskTemplate#hasRootFilesystem()}
+         * × {@link lekkit.scev.machine.firmware.ScevFirmware#wantsNvmeRoot()}
+         * abstraction, {@code root=} is now injected by
+         * {@link MachineSpecParser} only when both sides opt in. Callers who
+         * construct a spec directly (tests, power-user NBT) set whatever
+         * cmdline they want via {@link #cmdline(String)}.
+         */
+        private String cmdline = "";
         private BootromMode bootromMode = BootromMode.FIRMWARE_ELSE_DEMO;
 
         private Builder(UUID uuid) { this.uuid = uuid; }

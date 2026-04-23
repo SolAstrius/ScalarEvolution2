@@ -31,11 +31,46 @@ import net.minecraft.network.chat.Component
  */
 object BuildrootDiskTemplate : ScevDiskTemplate {
     const val ASSET_NAME = "linux_rootfs.ext2"
-    const val SIZE_MB = 2048L
+
+    /**
+     * Declared capacity in MiB. The shipped `linux_rootfs.ext2` is much
+     * smaller (64 MiB BusyBox rootfs from `tools/buildroot/build-kernel.sh`,
+     * or a 16 MiB skeleton on older builds). [lekkit.scev.server.StorageManager.initImage]
+     * sparse-extends the per-UUID image to this value after the template
+     * copy, so from the guest's perspective the NVMe block device is 1 GiB
+     * — matching what the item tooltip advertises and what [lekkit.scev.items.NvmeItem.SIZE_MB]
+     * declares for blank NVMes. The `/init` pivot script in
+     * `tools/buildroot/rootfs_overlay/init` calls `resize2fs` on first boot
+     * to grow the filesystem to fill that advertised capacity.
+     */
+    const val SIZE_MB = 1024L
+
     const val FILESYSTEM_UUID = "deadbeef-cafe-babe-feed-facefacefeed"
     const val FILESYSTEM_LABEL = "SCEV_ROOTFS"
 
     override fun assetName(): String = ASSET_NAME
     override fun sizeMb(): Long = SIZE_MB
     override fun displayName(): Component = Component.literal("Buildroot Linux")
+
+    /**
+     * Intended pairing is [lekkit.scev.machine.firmware.LinuxFirmware] plus
+     * the initramfs pivot script in `tools/buildroot/rootfs_overlay/init`:
+     * kernel loads from flash, initramfs switch_roots to this disk,
+     * pid 1 lives on ext4. The declaration is the hook that makes the
+     * parser emit `root=<rootDevice()> rw rootwait`.
+     *
+     * The asset is a **raw** ext filesystem (genext2fs output, no MBR
+     * wrapping), mountable at the whole-disk device — so this template
+     * keeps the interface default of `/dev/nvme0n1` for [rootDevice].
+     * Contrast [AlpineDiskTemplate], whose build wraps ext4 in an MBR
+     * partition table and therefore overrides rootDevice to p1.
+     */
+    override fun hasRootFilesystem(): Boolean = true
+
+    /**
+     * No extlinux.conf / on-disk kernel — U-Boot would find nothing to boot.
+     * Pair with [lekkit.scev.machine.firmware.LinuxFirmware], not
+     * [lekkit.scev.machine.firmware.OpenFirmware].
+     */
+    override fun isBootable(): Boolean = false
 }

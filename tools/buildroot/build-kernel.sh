@@ -68,17 +68,62 @@ sed -i '/^BR2_LINUX_KERNEL_CONFIG_FRAGMENT_FILES/d' .config
 echo "BR2_LINUX_KERNEL_CONFIG_FRAGMENT_FILES=\"${CACHE_DIR}/linux_fragment.config\"" >> .config
 
 echo ""
-echo "=== Switching rootfs to embedded initramfs ==="
-# Remove the default ext2/tar rootfs outputs — we ship a single self-
-# contained kernel Image with the BusyBox userspace baked in via cpio
-# → CONFIG_INITRAMFS_SOURCE.
-sed -i '/^BR2_TARGET_ROOTFS_EXT2/d' .config
+echo "=== Configuring dual rootfs (cpio initramfs + ext4 on-disk) ==="
+# Buildroot emits TWO images from the same userspace:
+#
+#   1. rootfs.cpio.gz — embedded into the kernel via
+#      CONFIG_INITRAMFS_SOURCE. Kernel unpacks at boot. Serves as:
+#      (a) pid-1 environment when no NVMe is attached (demo machines),
+#      (b) the environment in which our /init pivot script runs.
+#
+#   2. rootfs.ext4 — shipped separately as an asset; copied into the
+#      per-UUID disk image by StorageManager on first power-on when
+#      a preloaded Buildroot NVMe is installed. Identical content to
+#      rootfs.cpio.gz so the post-switch_root userspace is byte-for-
+#      byte what the initramfs would have provided — only difference
+#      is that writes now persist to disk.
+#
+# We intentionally keep the kernel's embedded initramfs even when the
+# ext4 ships. Without it, an untouched workstation (no NVMe) panics on
+# "unable to mount root" — breaks every demo machine and test.
+sed -i '/^BR2_TARGET_ROOTFS_EXT2=/d' .config
+sed -i '/^BR2_TARGET_ROOTFS_EXT2_SIZE/d' .config
+sed -i '/^BR2_TARGET_ROOTFS_EXT2_VERSION/d' .config
+sed -i '/^BR2_TARGET_ROOTFS_EXT2_LABEL/d' .config
 sed -i '/^BR2_TARGET_ROOTFS_TAR/d' .config
 sed -i '/^BR2_TARGET_ROOTFS_CPIO/d' .config
 echo 'BR2_TARGET_ROOTFS_CPIO=y' >> .config
 echo 'BR2_TARGET_ROOTFS_CPIO_GZIP=y' >> .config
 sed -i '/^BR2_TARGET_ROOTFS_INITRAMFS/d' .config
 echo 'BR2_TARGET_ROOTFS_INITRAMFS=y' >> .config
+# Enable the ext4 output. 64 MiB gives us room for BusyBox (~10 MiB),
+# libs, and the overlay init script without being so large that the jar
+# bloats — StorageManager pads the per-UUID image out to the declared
+# BuildrootDiskTemplate.SIZE_MB (1 GiB) on first power-on, and the /init
+# pivot script runs resize2fs to grow the filesystem to match.
+echo 'BR2_TARGET_ROOTFS_EXT2=y' >> .config
+echo 'BR2_TARGET_ROOTFS_EXT2_SIZE="64M"' >> .config
+echo 'BR2_TARGET_ROOTFS_EXT2_LABEL="SCEV_ROOTFS"' >> .config
+# ext2/3/4 variant selection is one-hot. Buildroot's default Kconfig
+# defaults to BR2_TARGET_ROOTFS_EXT2_4 when ext2 is on; set it
+# explicitly so we never ship an ext2-only image that the kernel's
+# CONFIG_EXT4_FS=y would flag.
+sed -i '/^BR2_TARGET_ROOTFS_EXT2_2=/d' .config
+sed -i '/^BR2_TARGET_ROOTFS_EXT2_3=/d' .config
+sed -i '/^BR2_TARGET_ROOTFS_EXT2_4=/d' .config
+echo '# BR2_TARGET_ROOTFS_EXT2_2 is not set'  >> .config
+echo '# BR2_TARGET_ROOTFS_EXT2_3 is not set'  >> .config
+echo 'BR2_TARGET_ROOTFS_EXT2_4=y'             >> .config
+
+echo ""
+echo "=== Enabling e2fsprogs (resize2fs + e2fsck for pivot) ==="
+# The /init pivot script calls e2fsck + resize2fs to grow the disk's
+# filesystem after StorageManager sparse-extends the per-UUID image to
+# the declared capacity. Both tools live in e2fsprogs.
+sed -i '/^BR2_PACKAGE_E2FSPROGS/d' .config
+echo 'BR2_PACKAGE_E2FSPROGS=y'         >> .config
+echo 'BR2_PACKAGE_E2FSPROGS_E2FSCK=y'  >> .config
+echo 'BR2_PACKAGE_E2FSPROGS_RESIZE2FS=y' >> .config
 
 echo ""
 echo "=== Enabling ALSA userspace (aplay + amixer) ==="
@@ -143,12 +188,37 @@ else
 fi
 
 echo ""
+echo "=== Pinning deterministic UUID on rootfs.ext2 ==="
+# BuildrootDiskTemplate in the Java side asserts a specific UUID
+# (deadbeef-cafe-babe-feed-facefacefeed) so the preloaded_nvme_seeds_
+# image_from_buildroot_template GameTest can verify the bytes that
+# reached the per-UUID disk image actually came from this recipe. Pin
+# it here so random-on-every-build doesn't invalidate the check.
+apt-get install -y -qq e2fsprogs >/dev/null
+EXT_IMAGE="${CACHE_DIR}/output/images/rootfs.ext2"
+if [ -f "${EXT_IMAGE}" ]; then
+    tune2fs -U deadbeef-cafe-babe-feed-facefacefeed "${EXT_IMAGE}"
+    tune2fs -L SCEV_ROOTFS                          "${EXT_IMAGE}"
+    e2fsck -f -n "${EXT_IMAGE}"  # verify clean
+else
+    echo "WARN: ${EXT_IMAGE} not produced — ext4 output step may be disabled"
+fi
+
+echo ""
 echo "=== Collecting outputs ==="
 ls -la "${CACHE_DIR}/output/images/"
 mkdir -p "${OUTPUT_DIR}"
 cp "${CACHE_DIR}/output/images/Image" "${OUTPUT_DIR}/Image"
 cp -f "${CACHE_DIR}/output/images/rootfs.cpio.gz" "${OUTPUT_DIR}/" 2>/dev/null || \
 cp -f "${CACHE_DIR}/output/images/rootfs.cpio"    "${OUTPUT_DIR}/" 2>/dev/null || true
+# rootfs.ext2 ships via BR2_TARGET_ROOTFS_EXT2_4=y — Buildroot keeps the
+# filename `.ext2` even when the on-disk format is ext4. We ship it under
+# its literal name `linux_rootfs.ext2` so BuildrootDiskTemplate.ASSET_NAME
+# stays back-compat with every test that reads the asset by filename.
+# (Kernel treats ext4 and ext2 images the same via CONFIG_EXT4_USE_FOR_EXT2
+# so the label is descriptive, not prescriptive.)
+cp -f "${CACHE_DIR}/output/images/rootfs.ext2" "${OUTPUT_DIR}/linux_rootfs.ext2" 2>/dev/null || \
+    echo "WARN: rootfs.ext2 not produced — disk-persistence path won't work"
 ls -lh "${OUTPUT_DIR}/"
 
 echo ""
@@ -157,4 +227,7 @@ xxd -l 128 "${OUTPUT_DIR}/Image"
 
 echo ""
 echo "=== Image size: $(stat -c '%s' "${OUTPUT_DIR}/Image") bytes ==="
+if [ -f "${OUTPUT_DIR}/linux_rootfs.ext2" ]; then
+    echo "=== rootfs.ext2 size: $(stat -c '%s' "${OUTPUT_DIR}/linux_rootfs.ext2") bytes ==="
+fi
 echo "=== DONE ==="

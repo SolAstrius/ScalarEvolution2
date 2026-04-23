@@ -80,4 +80,16 @@ class LinuxFirmwareTest {
         // linux_kernel_boots_and_draws_fbcon GameTest at the reduced floor.
         assertEquals(256, LinuxFirmware.INSTANCE.minRamMb());
     }
+
+    @Test
+    @DisplayName("wantsNvmeRoot is true — parser injects root= when a rootfs disk is attached")
+    void wantsNvmeRoot() {
+        assertTrue(LinuxFirmware.INSTANCE.wantsNvmeRoot(),
+                "LinuxFirmware loads the kernel directly via rvvm_load_kernel; the kernel "
+                        + "reads root= off the cmdline at boot. Turning this off would suppress "
+                        + "the parser's per-template root=<device> injection and force the guest "
+                        + "to stay in its embedded initramfs even when a rootfs NVMe is installed "
+                        + "— exactly the 'reboot starts fresh' regression the disk-persistence "
+                        + "refactor set out to fix.");
+    }
 }

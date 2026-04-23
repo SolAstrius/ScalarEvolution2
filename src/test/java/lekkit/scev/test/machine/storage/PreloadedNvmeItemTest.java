@@ -112,8 +112,10 @@ class PreloadedNvmeItemTest {
                 "When the template isn't registered, getOrigin must fall back to the "
                         + "NvmeItem default ('rootfs.ext2') so the item remains placeable "
                         + "and the world stays openable. Lost rootfs > crashed save.");
-        assertEquals(2048, item.getSizeMb(),
-                "Same fallback shape for getSizeMb — matches blank NvmeItem's 2048 MiB default.");
+        assertEquals(lekkit.scev.items.NvmeItem.SIZE_MB, item.getSizeMb(),
+                "Same fallback shape for getSizeMb — matches blank NvmeItem's declared "
+                        + "capacity. Keeping the test bound to the constant so a future resize "
+                        + "lifts both sides together.");
         // defaultTemplateId is still reported — it's hardcoded on the item,
         // independent of whether the registry currently has it.
         assertEquals(DiskTemplateRegistry.ALPINE, item.getDefaultTemplateId());

@@ -1,0 +1,155 @@
+#!/bin/sh
+#
+# /init — runs as pid 1 when the Linux kernel unpacks Buildroot's cpio
+# initramfs (present because Buildroot's CONFIG_INITRAMFS_SOURCE embeds
+# rootfs.cpio.gz into the Image). When a Scalar Evolution preloaded
+# NVMe is attached, pivot to its on-disk rootfs so guest state persists
+# across reboots. When no NVMe is attached, fall through to the
+# initramfs-only userspace path — same behavior as before this feature.
+#
+# The target device is decided by the host: MachineSpecParser injects a
+# `root=<dev>` fragment into the kernel cmdline when both the firmware
+# (LinuxFirmware.wantsNvmeRoot) and the template (ScevDiskTemplate.hasRootFilesystem)
+# opt in. Values we care about:
+#
+#   * `/dev/nvme0n1`   — raw ext filesystem (BuildrootDiskTemplate, genext2fs
+#                        output, no partition table). Legacy fallback when
+#                        no root= is set so demo machines still pivot.
+#   * `/dev/nvme0n1p1` — MBR partition 1 (AlpineDiskTemplate, sfdisk-created
+#                        single-partition layout). The Buildroot kernel
+#                        enumerates this via CONFIG_MSDOS_PARTITION=y.
+#
+# Decision flow:
+#   1. Parse root= out of /proc/cmdline. Missing → fall back to /dev/nvme0n1
+#      so the Buildroot-disk path still works when nothing overrides it.
+#   2. Poll briefly for the block device. Absent → stay in initramfs
+#      (demo machines with no NVMe).
+#   3. Offline fsck + resize2fs so a disk shipped at a smaller size
+#      expands to fill the per-UUID image on first boot (the scev host
+#      sparsely grows <uuid>.img to the declared BuildrootDiskTemplate
+#      size — resize2fs reconciles the filesystem to match).
+#   4. Mount ext4 rw at /newroot. Mount fails → stay in initramfs.
+#   5. Sanity: /newroot must contain an init executable. No → stay in
+#      initramfs (the disk is a blank NvmeItem, not our rootfs template).
+#   6. switch_root to /newroot. From here, all writes to /, /etc, /root,
+#      /home etc. land on the disk and survive reboots.
+#
+# Why this file exists at /init (not /sbin/init):
+#   Linux's cpio initramfs loader runs /init if present, else /sbin/init.
+#   Adding this file via tools/buildroot/rootfs_overlay/init intercepts
+#   pid 1 before BusyBox's init gets a chance to run. If the pivot
+#   decision goes "stay in initramfs", we exec /sbin/init manually so
+#   BusyBox init takes over exactly as it would have without this file.
+
+set +e
+
+mount -t proc proc /proc      2>/dev/null
+mount -t sysfs sys /sys       2>/dev/null
+mount -t devtmpfs devtmpfs /dev 2>/dev/null
+
+log() {
+    # Echo to console so the scev-kernel log channel captures each decision.
+    # Redirect-of-redirect is deliberate: /dev may not exist on the target
+    # if devtmpfs didn't mount (shouldn't happen, but don't wedge boot).
+    echo "[scev-pivot] $*" > /dev/console 2>/dev/null || true
+}
+
+# --- Resolve target device from the kernel cmdline ---------------------
+#
+# The parser already assembled `root=<dev>` (or nothing) on the host side
+# based on template × firmware opt-in. Honor that instead of hardcoding
+# a device here — templates with MBR layouts (AlpineDiskTemplate returns
+# `/dev/nvme0n1p1`) don't match a whole-disk probe.
+#
+# Shell-field parsing: /proc/cmdline is space-separated `key=value`
+# tokens. Grab the first `root=` token; if there are multiple (shouldn't
+# happen here — U-Boot isn't in our boot path for LinuxFirmware — but
+# Linux respects the last one, so match that) honor the LAST match.
+parse_root_from_cmdline() {
+    local cmdline root_arg
+    cmdline=$(cat /proc/cmdline 2>/dev/null)
+    root_arg=""
+    for tok in $cmdline; do
+        case "$tok" in
+            root=*) root_arg="${tok#root=}" ;;
+        esac
+    done
+    printf '%s' "$root_arg"
+}
+
+ROOT_DEV=$(parse_root_from_cmdline)
+if [ -z "$ROOT_DEV" ]; then
+    # No root= on cmdline — fall back to the whole-disk probe so demo
+    # machines and legacy paths (buildroot template without the abstraction
+    # refactor) still pivot to /dev/nvme0n1 when present.
+    ROOT_DEV=/dev/nvme0n1
+    log "no root= on cmdline; defaulting to ${ROOT_DEV}"
+else
+    log "cmdline root=${ROOT_DEV}"
+fi
+
+# Device enumeration can lag the kernel's initcall sequence. Poll briefly.
+# 5 s ceiling — a workstation without an NVMe doesn't need us to wait
+# longer than that before falling through to initramfs userspace.
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+    [ -b "$ROOT_DEV" ] && break
+    sleep 0.5
+done
+
+if [ ! -b "$ROOT_DEV" ]; then
+    log "no ${ROOT_DEV}; running initramfs userspace"
+    exec /sbin/init "$@"
+fi
+
+# Resize the filesystem to fill the device. Safe unmounted: the disk
+# just came up. e2fsck -p runs in preen mode (auto-fix simple issues,
+# exit non-zero on anything severe). Both tools are wired in via
+# BR2_PACKAGE_E2FSPROGS in the build script — missing them logs and
+# continues; the mount below will either work or hand control back to
+# initramfs userspace.
+#
+# Partition-aware note: when ROOT_DEV is `/dev/nvme0n1p1` the MBR has
+# already set up the partition extents, so resize2fs grows the ext4
+# inside the partition — not the whole device. That matches what the
+# host-side sparse-extend wrote (StorageManager.growImage extends the
+# whole image file; the partition table's boundary lives on disk, so
+# resize2fs respects it).
+if [ -x /sbin/e2fsck ] && [ -x /sbin/resize2fs ]; then
+    e2fsck -p "$ROOT_DEV" >/dev/null 2>&1 || log "e2fsck reported a non-trivial issue (rc=$?)"
+    resize2fs "$ROOT_DEV"  >/dev/null 2>&1 || log "resize2fs refused to grow (rc=$?)"
+fi
+
+mkdir -p /newroot
+if ! mount -t ext4 -o rw "$ROOT_DEV" /newroot 2>/dev/null; then
+    # ext4 failed — try ext2/ext3 since Buildroot's older template might
+    # still be on the disk. Ext4 is a superset; ext2 images mount as ext4
+    # on modern kernels, but the opposite fails loudly, so try both.
+    if ! mount -t ext2 -o rw "$ROOT_DEV" /newroot 2>/dev/null; then
+        log "mount ${ROOT_DEV} failed; running initramfs userspace"
+        exec /sbin/init "$@"
+    fi
+fi
+
+# A genuinely-blank NVMe (player installed a blank NvmeItem instead of
+# the preloaded one) would mount but have no userspace. Avoid pivoting
+# into a black hole — leave the initramfs as the run environment.
+if [ ! -x /newroot/sbin/init ] && [ ! -x /newroot/bin/busybox ]; then
+    log "${ROOT_DEV} mounted but no /sbin/init or /bin/busybox; running initramfs"
+    umount /newroot 2>/dev/null
+    exec /sbin/init "$@"
+fi
+
+log "switch_root -> ${ROOT_DEV} (writes persist)"
+
+# Move the pseudo-filesystems into the new root so systemd/busybox-init
+# sees them without re-mounting. Any of these failing is non-fatal;
+# userspace typically re-mounts them on /etc/init.d/mountvirtfs anyway.
+mount --move /proc /newroot/proc 2>/dev/null
+mount --move /sys  /newroot/sys  2>/dev/null
+mount --move /dev  /newroot/dev  2>/dev/null
+
+exec switch_root /newroot /sbin/init "$@"
+
+# If switch_root returns, something went wrong (shouldn't happen).
+log "switch_root returned unexpectedly; running initramfs userspace as fallback"
+exec /sbin/init "$@"

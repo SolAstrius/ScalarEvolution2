@@ -9,10 +9,13 @@ import com.mojang.logging.LogUtils;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.nio.ByteBuffer;
+import java.nio.channels.FileChannel;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
 import java.util.Objects;
 import java.util.zip.CRC32;
 import org.jetbrains.annotations.Nullable;
@@ -185,14 +188,24 @@ public final class FirmwareAssets {
             LOG.warn("Could not create temp file under {}", ASSETS_DIR, e);
             return null;
         }
+        // Sparse-aware extraction. The shipped disk images (alpine_rootfs.img,
+        // linux_rootfs.ext2) are mostly-empty ext4 filesystems — a plain
+        // in.transferTo(out) would write every zero block to disk, costing
+        // ~1 GiB for a 1 GiB image that's only 60–80 MiB of real data. The
+        // jar stores the full bytes (ZIP can't express holes), but we can
+        // recover sparseness at write time by detecting zero-filled chunks
+        // and skipping them — FileChannel.position advances past the hole
+        // and the destination filesystem leaves that region unallocated.
         try (InputStream in = FirmwareAssets.class.getResourceAsStream(CLASSPATH_PREFIX + name);
-             OutputStream out = Files.newOutputStream(tmp)) {
+             FileChannel out = FileChannel.open(tmp,
+                     StandardOpenOption.WRITE,
+                     StandardOpenOption.SPARSE)) {
             if (in == null) {
                 LOG.warn("Bundled firmware asset {} disappeared between probe and open", name);
                 Files.deleteIfExists(tmp);
                 return null;
             }
-            in.transferTo(out);
+            sparseStreamCopy(in, out);
         } catch (IOException e) {
             LOG.warn("Failed to extract bundled firmware asset {}", name, e);
             try { Files.deleteIfExists(tmp); } catch (IOException ignore) {}
@@ -255,6 +268,80 @@ public final class FirmwareAssets {
         } catch (IOException e) {
             return -1;
         }
+    }
+
+    /**
+     * Stream-to-FileChannel copy that preserves sparseness by skipping
+     * 64 KiB zero-filled chunks. Destination {@link FileChannel#position()}
+     * advances past each hole instead of writing — on sparse-capable
+     * filesystems (APFS/ext4/NTFS) the skipped region is never allocated.
+     *
+     * <p>Final file size is the sum of bytes read from the stream; when the
+     * stream's tail is a zero chunk the last thing we do is extend the file
+     * to that length by writing a single zero byte at the end.
+     *
+     * <p>64 KiB chunk: large enough to amortise syscall cost, small enough
+     * that non-zero content surrounded by zeros doesn't pull a whole MiB
+     * into allocation.
+     */
+    private static void sparseStreamCopy(InputStream in, FileChannel out) throws IOException {
+        final int chunkSize = 64 * 1024;
+        byte[] buf = new byte[chunkSize];
+        long pos = 0;
+        boolean lastChunkSkipped = false;
+        while (true) {
+            int filled = fillBuffer(in, buf);
+            if (filled == 0) break;
+            if (isAllZero(buf, filled)) {
+                pos += filled;
+                lastChunkSkipped = true;
+                continue;
+            }
+            out.position(pos);
+            ByteBuffer bb = ByteBuffer.wrap(buf, 0, filled);
+            int written = 0;
+            while (written < filled) {
+                written += out.write(bb);
+            }
+            pos += filled;
+            lastChunkSkipped = false;
+        }
+        // Preserve logical length when the tail was all zeros: write a
+        // single zero byte at pos-1 so the file shows the right size.
+        if (lastChunkSkipped && pos > 0) {
+            out.position(pos - 1);
+            out.write(ByteBuffer.wrap(new byte[] { 0 }));
+        }
+    }
+
+    /**
+     * Read as close to {@code buf.length} bytes as the stream provides,
+     * returning the total read. May be less than the buffer when the stream
+     * is exhausted; returns 0 at EOF. Works around the fact that
+     * {@link InputStream#read(byte[])} can return early on a partial buffer
+     * even when more data is available — which would make our zero-chunk
+     * detection misalign from the 64 KiB grid.
+     */
+    private static int fillBuffer(InputStream in, byte[] buf) throws IOException {
+        int total = 0;
+        while (total < buf.length) {
+            int n = in.read(buf, total, buf.length - total);
+            if (n < 0) break;
+            total += n;
+        }
+        return total;
+    }
+
+    /**
+     * True iff the first {@code len} bytes of {@code buf} are all zero.
+     * Kept colocated with the sparse-copy machinery so the zero predicate
+     * used for hole detection is in one place.
+     */
+    private static boolean isAllZero(byte[] buf, int len) {
+        for (int i = 0; i < len; i++) {
+            if (buf[i] != 0) return false;
+        }
+        return true;
     }
 
     /**
