@@ -25,6 +25,7 @@ public class RamItem extends Item {
             case 1 -> 16;
             case 2 -> 32;
             case 3 -> 64;
+            case 4 -> 128;
             default -> 0;
         };
     }

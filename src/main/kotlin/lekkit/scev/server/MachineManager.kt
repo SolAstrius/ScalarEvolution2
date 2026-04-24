@@ -6,6 +6,7 @@
 package lekkit.scev.server
 
 import com.mojang.logging.LogUtils
+import java.util.HashSet
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import lekkit.scev.machine.MachineBackendFactory
@@ -123,4 +124,16 @@ object MachineManager {
     /** Visible for tests / telemetry. */
     @JvmStatic
     fun liveMachineCount(): Int = machines.size
+
+    /**
+     * Snapshot of every currently-running machine's UUID. Used by the
+     * disk-image GC ([lekkit.scev.server.gc.scanners.RunningMachineScanner])
+     * to keep the backing images of live VMs out of the orphan set —
+     * deleting a running VM's disk image would cause immediate guest I/O
+     * errors and likely crash the machine.
+     *
+     * <p>Returns a defensive copy. Safe to iterate outside the tick thread.
+     */
+    @JvmStatic
+    fun getActiveUuids(): Set<UUID> = HashSet(machines.keys)
 }

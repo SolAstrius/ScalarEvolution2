@@ -320,12 +320,13 @@ public class ScevRecipeProvider extends RecipeProvider {
                 .save(out);
 
         // RAM sticks — same shape, scaled substrate. Each tier doubles
-        // capacity (8 → 16 → 32 → 64 MiB) and the substrate cost climbs
-        // to match.
+        // capacity (8 → 16 → 32 → 64 → 128 MiB) and the substrate cost
+        // climbs to match, peaking at netherite for the top tier.
         ramRecipe(out, ScevRegistry.RAM_SODIMM1.get(), Items.IRON_NUGGET);
         ramRecipe(out, ScevRegistry.RAM_SODIMM2.get(), Items.GOLD_NUGGET);
         ramRecipe(out, ScevRegistry.RAM_SODIMM3.get(), Items.GOLD_INGOT);
         ramRecipe(out, ScevRegistry.RAM_SODIMM4.get(), Items.DIAMOND);
+        ramRecipe(out, ScevRegistry.RAM_SODIMM5.get(), Items.NETHERITE_INGOT);
 
         // Motherboard tier 2 — tier 1 as core + more expansion. Players
         // pay a soldering iron per tier upgrade; matches the tier-1

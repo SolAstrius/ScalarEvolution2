@@ -34,6 +34,7 @@ public class ScevItemModelProvider extends ItemModelProvider {
                 ScevRegistry.SOC1, ScevRegistry.SOC2, ScevRegistry.SOC3,
                 ScevRegistry.RAM_SODIMM1, ScevRegistry.RAM_SODIMM2,
                 ScevRegistry.RAM_SODIMM3, ScevRegistry.RAM_SODIMM4,
+                ScevRegistry.RAM_SODIMM5,
                 ScevRegistry.FLASH_CHIP, ScevRegistry.HDD, ScevRegistry.NVME,
                 ScevRegistry.VGA_CARD, ScevRegistry.GPIO_CARD,
                 ScevRegistry.SOUND_CARD, ScevRegistry.RTL8169,

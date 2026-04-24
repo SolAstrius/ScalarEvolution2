@@ -103,22 +103,120 @@ class AvSyncIntegrationTest {
     /* ============================================================== */
 
     @Test
-    @DisplayName("Server-side MachineClock produces monotonic, sample-exact audio PTS")
+    @DisplayName("Server-side MachineClock advances audio PTS by exactly 20 ms per 960-sample frame")
     fun serverAudioPtsMonotonic() {
         val clock = MachineClock(MachineClock.DEFAULT_SAMPLE_RATE_HZ)
-        val expected = LongArray(10) { it * 20_000L }  // 20 ms per frame at 48 kHz / 960 samples
-        val actual = LongArray(10) { clock.nextAudioPts(960).value }
-        assertEquals(expected.toList(), actual.toList())
+        val pts = LongArray(10) { clock.nextAudioPts(960).value }
+        // Drift-free within the stream: each 960-sample frame advances
+        // PTS by exactly 20 000 µs, regardless of wall-clock jitter.
+        for (i in 1 until 10) {
+            assertEquals(20_000L, pts[i] - pts[i - 1],
+                "expected 20 000 µs spacing from frame ${i - 1} to $i, got ${pts[i] - pts[i - 1]}")
+        }
     }
 
     @Test
-    @DisplayName("Server-side reset() returns audio PTS to zero for next emission")
-    fun serverResetZeroesAudioPts() {
+    @DisplayName("First audio emission anchors to wall-clock offset from origin, not 0")
+    fun firstAudioPtsAnchorsToWallClockOffset() {
+        val clock = MachineClock(MachineClock.DEFAULT_SAMPLE_RATE_HZ)
+        // Let the origin run — simulating video emitting first and
+        // advancing the wall-clock-since-origin. This is the real
+        // scenario: video ticks from machine boot, aplay starts later.
+        val videoPtsBeforeAudio = clock.nowPts().value
+        Thread.sleep(15)
+        val videoPtsJustBeforeFirstAudio = clock.nowPts().value
+        val firstAudio = clock.nextAudioPts(960).value
+        // First audio PTS must sit in the same time axis as video —
+        // roughly equal to video's "now" at the moment of the call.
+        // Without this, video has PTS ~15 000, audio has PTS 0, and
+        // the client's MediaClock tears them apart on re-anchor.
+        assertTrue(firstAudio >= videoPtsJustBeforeFirstAudio,
+            "first audio pts $firstAudio must not precede concurrent video pts $videoPtsJustBeforeFirstAudio")
+        // Sanity: audio anchor tracks video, not stays at 0. The gap
+        // between video pts before audio (≈ 0) and first audio pts
+        // should be at least the 15 ms we slept — proving the anchor
+        // moved.
+        assertTrue(firstAudio - videoPtsBeforeAudio > 10_000L,
+            "first audio pts should be well past origin — video was at $videoPtsBeforeAudio, audio at $firstAudio")
+    }
+
+    @Test
+    @DisplayName("Audio session re-anchors to wall clock after a silent gap (aplay → Ctrl+C → aplay)")
+    fun audioReanchorsAcrossSessionGap() {
+        val clock = MachineClock(MachineClock.DEFAULT_SAMPLE_RATE_HZ)
+        // Session A: simulate a burst of audio playback.
+        val aFirst = clock.nextAudioPts(960).value
+        repeat(4) { clock.nextAudioPts(960) }
+        val aLast = clock.nextAudioPts(960).value
+        assertEquals(aFirst + 5 * 20_000L, aLast, "session A spacing drift")
+
+        // Ctrl+C on aplay: stream goes silent. The server stops emitting
+        // audio, but wall-clock time keeps ticking (video keeps going).
+        // AUDIO_SESSION_GAP_NS is 500 ms, so sleep longer than that.
+        Thread.sleep(600L)
+
+        // Session B: new aplay invocation. First frame must re-anchor
+        // to current wall-clock offset — picking up from the stale
+        // sample counter would land PTS 600 ms behind wall clock, and
+        // the client's MediaClock would trip its own re-anchor on the
+        // backward jump, causing the observed display freeze.
+        val bFirst = clock.nextAudioPts(960).value
+        val wallNow = clock.nowPts().value
+        // Session B's first PTS sits in the same axis as a concurrent
+        // video emission — so within a small epsilon of nowPts().
+        assertTrue(bFirst <= wallNow,
+            "session B first audio pts $bFirst must not exceed concurrent video pts $wallNow")
+        assertTrue(wallNow - bFirst < 5_000L,
+            "session B first audio pts $bFirst should be near concurrent video pts $wallNow (gap ${wallNow - bFirst} µs)")
+        // Must have jumped forward from session A's last PTS by at
+        // least the gap duration.
+        assertTrue(bFirst - aLast > 500_000L,
+            "session B PTS should jump past the 500 ms silent gap; got ${bFirst - aLast} µs advance")
+
+        // Within session B, spacing returns to drift-free.
+        val bSecond = clock.nextAudioPts(960).value
+        assertEquals(20_000L, bSecond - bFirst,
+            "session B must still advance by 20 000 µs per frame")
+    }
+
+    @Test
+    @DisplayName("Small inter-tick gap (< session threshold) does NOT re-anchor audio session")
+    fun audioDoesNotReanchorOnNormalTickJitter() {
+        val clock = MachineClock(MachineClock.DEFAULT_SAMPLE_RATE_HZ)
+        val first = clock.nextAudioPts(960).value
+        // Normal server-tick interval (~50 ms) or a single skipped tick
+        // (~100 ms) must NOT count as a session boundary — playback
+        // would hitch every time Minecraft took a tick longer than
+        // average. Stay well under AUDIO_SESSION_GAP_NS = 500 ms.
+        Thread.sleep(100L)
+        val second = clock.nextAudioPts(960).value
+        // Still the same session: PTS advances by exactly one frame
+        // (20 000 µs) regardless of the wall-clock gap.
+        assertEquals(20_000L, second - first,
+            "100 ms tick gap must not start a new audio session")
+    }
+
+    @Test
+    @DisplayName("Server-side reset() re-anchors the audio stream at the new origin")
+    fun serverResetReanchorsAudio() {
         val clock = MachineClock(MachineClock.DEFAULT_SAMPLE_RATE_HZ)
         repeat(5) { clock.nextAudioPts(960) }
-        assertEquals(5 * 20_000L, clock.nextAudioPts(960).value)
+        val pre = clock.nextAudioPts(960).value  // 6th emit
         clock.reset()
-        assertEquals(0L, clock.nextAudioPts(960).value)
+        val postFirst = clock.nextAudioPts(960).value
+        // After reset, origin is fresh: first audio emit on the new
+        // origin anchors at a small wall-clock offset (≈ 0), so PTS
+        // should be well below the pre-reset counter that had been
+        // running for 6 frames' worth of audio + whatever wall time
+        // had elapsed.
+        assertTrue(postFirst < pre,
+            "post-reset first audio pts $postFirst should be less than pre-reset $pre")
+        assertTrue(postFirst < 10_000L,
+            "post-reset audio pts should anchor near 0, got $postFirst")
+        // And subsequent frames still advance by exactly 20 ms.
+        val postSecond = clock.nextAudioPts(960).value
+        assertEquals(20_000L, postSecond - postFirst,
+            "post-reset stream must still advance by 20 000 µs per frame")
     }
 
     @Test

@@ -159,6 +159,7 @@ public class ScevLangProvider extends LanguageProvider {
         addItem(ScevRegistry.RAM_SODIMM2,        "Memory Stick (16 MiB)");
         addItem(ScevRegistry.RAM_SODIMM3,        "Memory Stick (32 MiB)");
         addItem(ScevRegistry.RAM_SODIMM4,        "Memory Stick (64 MiB)");
+        addItem(ScevRegistry.RAM_SODIMM5,        "Memory Stick (128 MiB)");
         addItem(ScevRegistry.MOTHERBOARD1,       "Motherboard");
         addItem(ScevRegistry.MOTHERBOARD2,       "Advanced Motherboard");
         addItem(ScevRegistry.MOTHERBOARD3,       "Enterprise Motherboard");

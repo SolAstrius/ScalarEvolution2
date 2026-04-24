@@ -204,6 +204,7 @@ public final class ScevRegistry {
     public static final DeferredItem<RamItem> RAM_SODIMM2 = ITEMS.register("ram_sodimm2", () -> new RamItem(singleProps(), 1));
     public static final DeferredItem<RamItem> RAM_SODIMM3 = ITEMS.register("ram_sodimm3", () -> new RamItem(singleProps(), 2));
     public static final DeferredItem<RamItem> RAM_SODIMM4 = ITEMS.register("ram_sodimm4", () -> new RamItem(singleProps(), 3));
+    public static final DeferredItem<RamItem> RAM_SODIMM5 = ITEMS.register("ram_sodimm5", () -> new RamItem(singleProps(), 4));
 
     public static final DeferredItem<FlashItem> FLASH_CHIP = ITEMS.register("flash_chip", () -> new FlashItem(singleProps()));
     public static final DeferredItem<StorageItem> HDD = ITEMS.register("hdd", () -> new StorageItem(singleProps(), "hdd.ext2", 1024));
@@ -376,6 +377,7 @@ public final class ScevRegistry {
         ScevSectionRegistry.assign(RAM_SODIMM2, SECTION_COMPUTING);
         ScevSectionRegistry.assign(RAM_SODIMM3, SECTION_COMPUTING);
         ScevSectionRegistry.assign(RAM_SODIMM4, SECTION_COMPUTING);
+        ScevSectionRegistry.assign(RAM_SODIMM5, SECTION_COMPUTING);
 
         // Storage — flash, HDD, NVMe (+ preloaded).
         ScevSectionRegistry.assign(FLASH_CHIP,     SECTION_STORAGE);

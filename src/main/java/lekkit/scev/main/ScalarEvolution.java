@@ -5,13 +5,27 @@
  */
 package lekkit.scev.main;
 
+import java.nio.file.Path;
 import lekkit.scev.client.ScevClient;
 import lekkit.scev.client.render.ScevRenderers;
 import lekkit.scev.network.ScevNetwork;
 import lekkit.scev.server.MachineManager;
 import lekkit.scev.server.StorageManager;
+import lekkit.scev.server.gc.DiskImageGc;
+import lekkit.scev.server.gc.DiskImageRegistry;
+import lekkit.scev.server.gc.GcPolicy;
+import lekkit.scev.server.gc.GcScheduler;
+import lekkit.scev.server.gc.ItemLifecycleListener;
+import lekkit.scev.server.gc.ScannerRegistry;
+import lekkit.scev.server.gc.ScevGc;
+import lekkit.scev.server.gc.ScevGcCommand;
+import lekkit.scev.server.gc.scanners.BlockEntityScanner;
+import lekkit.scev.server.gc.scanners.EntityScanner;
+import lekkit.scev.server.gc.scanners.PlayerInventoryScanner;
+import lekkit.scev.server.gc.scanners.RunningMachineScanner;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.level.storage.LevelResource;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.bus.api.SubscribeEvent;
@@ -22,9 +36,11 @@ import net.neoforged.fml.config.ModConfig;
 import net.neoforged.fml.event.lifecycle.FMLClientSetupEvent;
 import net.neoforged.fml.event.lifecycle.FMLCommonSetupEvent;
 import net.neoforged.neoforge.common.NeoForge;
+import net.neoforged.neoforge.event.RegisterCommandsEvent;
 import net.neoforged.neoforge.event.server.ServerStartingEvent;
 import net.neoforged.neoforge.event.server.ServerStoppingEvent;
 import net.neoforged.neoforge.event.tick.LevelTickEvent;
+import net.neoforged.neoforge.event.tick.ServerTickEvent;
 
 @Mod(ScalarEvolution.MODID)
 public final class ScalarEvolution {
@@ -72,6 +88,7 @@ public final class ScalarEvolution {
         NeoForge.EVENT_BUS.addListener(lekkit.scev.common.ServerScope::onServerStopping);
         NeoForge.EVENT_BUS.addListener(ScalarEvolution::onServerStarting);
         NeoForge.EVENT_BUS.addListener(ScalarEvolution::onServerStopping);
+        NeoForge.EVENT_BUS.addListener(ScalarEvolution::onRegisterCommands);
         // SoundStreamManager.onServerTick dispatches queued PCM frames to
         // nearby players every server tick. Registering by method reference
         // against the explicit event type bypasses @SubscribeEvent scanning —
@@ -81,6 +98,14 @@ public final class ScalarEvolution {
         // decodes frames, dispatches to the registered handlers, and pushes
         // responses back toward the guest.
         NeoForge.EVENT_BUS.addListener(lekkit.scev.rpc.ScevRpcManager::onServerTick);
+
+        // Disk-image GC:
+        //   * ItemLifecycleListener fires on ItemEntity expire / kill and
+        //     runs event-driven cleanup. Always on, no config knob.
+        //   * GcScheduler checks the config every tick and dispatches the
+        //     opt-in periodic sweep when enabled.
+        NeoForge.EVENT_BUS.register(ItemLifecycleListener.class);
+        NeoForge.EVENT_BUS.addListener(GcScheduler::onServerTick);
     }
 
     private static void onCommonSetup(FMLCommonSetupEvent event) {
@@ -92,16 +117,54 @@ public final class ScalarEvolution {
         // enqueueWork: registration is a plain concurrent-map put.
         lekkit.scev.machine.firmware.FirmwareRegistry.registerBuiltins();
         lekkit.scev.machine.storage.DiskTemplateRegistry.registerBuiltins();
+
+        // Register built-in disk-image GC scanners. Other mods may add their
+        // own (AE2 compat, Create contraptions, RS disks, …) from their own
+        // common-setup hook via ScannerRegistry.register().
+        ScannerRegistry.register(new RunningMachineScanner());
+        ScannerRegistry.register(new PlayerInventoryScanner());
+        ScannerRegistry.register(new BlockEntityScanner());
+        ScannerRegistry.register(new EntityScanner());
     }
 
     private static void onServerStarting(ServerStartingEvent event) {
         // Rebind NVMe / snapshot storage into the active world's save folder
         // so disk contents travel with the world (backup, copy, delete).
         StorageManager.onServerStarting(event.getServer());
+
+        // Stand up the per-world disk-image GC. Registry + images dir live
+        // under the world save so GC state travels with the save just like
+        // the images themselves do.
+        Path worldScev = event.getServer().getWorldPath(LevelResource.ROOT).resolve("scev");
+        Path imagesDir = worldScev.resolve("images");
+        Path registryFile = imagesDir.resolve(".registry.json");
+        DiskImageRegistry registry = DiskImageRegistry.load(registryFile);
+        GcPolicy policy = new GcPolicy(
+                ScevConfig.GC_CREATION_GRACE_MINUTES.get() * 60_000L,
+                ScevConfig.GC_SWEEP_RETENTION_DAYS.get() * 86_400_000L,
+                ScevConfig.GC_SWEEP_INTERVAL_HOURS.get() * 3_600_000L);
+        ScevGc.install(new DiskImageGc(imagesDir, registry, policy));
+        GcScheduler.reset();
     }
 
     private static void onServerStopping(ServerStoppingEvent event) {
+        // Persist the GC registry before the world is unloaded so the next
+        // boot picks up the current lastSeen map + protected set.
+        DiskImageGc gc = ScevGc.active();
+        if (gc != null) {
+            gc.registry().save();
+        }
+        ScevGc.uninstall();
+
         MachineManager.finishAllMachines();
         StorageManager.onServerStopping();
+    }
+
+    /**
+     * Wire the {@code /scev gc ...} command tree. Called once per server
+     * start via {@link RegisterCommandsEvent}.
+     */
+    private static void onRegisterCommands(RegisterCommandsEvent event) {
+        ScevGcCommand.register(event.getDispatcher());
     }
 }
