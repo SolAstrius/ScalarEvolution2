@@ -37,7 +37,7 @@ class BlockModelAssetTest {
      */
     private static final List<String> OBJ_BLOCKS = List.of(
             "workstation", "powermark", "tinkerpad", "crt_monitor",
-            "terminal", "keyboard", "keyboard_mouse");
+            "vt100", "keyboard", "keyboard_mouse");
 
     @Test
     @DisplayName("Every modded block has a blockstate file in generated/")
@@ -107,7 +107,7 @@ class BlockModelAssetTest {
             "powermark",      new AxisRange[] { new AxisRange(0, 1), new AxisRange(0, 1), new AxisRange(0, 1) },
             "tinkerpad",      new AxisRange[] { new AxisRange(0, 1), new AxisRange(0, 1), new AxisRange(0, 1) },
             "crt_monitor",    new AxisRange[] { new AxisRange(0, 1), new AxisRange(0, 1), new AxisRange(0, 1) },
-            "terminal",          new AxisRange[] { new AxisRange(0, 1), new AxisRange(0, 1), new AxisRange(0, 1) },
+            "vt100",          new AxisRange[] { new AxisRange(0, 1), new AxisRange(0, 1), new AxisRange(0, 1) },
             "keyboard",       new AxisRange[] { new AxisRange(0, 1), new AxisRange(0, 1), new AxisRange(0, 1) },
             // keyboard_mouse: mouse pokes out to the right past x=1 on purpose.
             "keyboard_mouse", new AxisRange[] { new AxisRange(0, 1.4), new AxisRange(0, 1), new AxisRange(0, 1) }

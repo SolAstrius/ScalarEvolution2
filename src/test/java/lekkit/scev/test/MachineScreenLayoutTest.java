@@ -29,6 +29,13 @@ class MachineScreenLayoutTest {
     private static final Path SCREEN = SourcePackages.find("lekkit/scev/client/screen/MachineScreen")
             .orElseThrow(() -> new AssertionError("MachineScreen source not found"));
 
+    // Inventory-hiding, focus-clearing, and the renderSlot/renderLabels no-ops
+    // are the same contract for every framebuffer-backed screen, so they live
+    // on ScevDisplayScreen now. Assertions over those shared contracts grep
+    // this file rather than MachineScreen.
+    private static final Path BASE = SourcePackages.find("lekkit/scev/client/screen/ScevDisplayScreen")
+            .orElseThrow(() -> new AssertionError("ScevDisplayScreen source not found"));
+
     @Test
     @DisplayName("MachineScreen computes a display scale that fits the window")
     void scalesToFitWindow() throws IOException {
@@ -65,10 +72,16 @@ class MachineScreenLayoutTest {
         String src = read();
         assertTrue(src.contains("displayW") && src.contains("displayH"),
                 "MachineScreen must use separate displayW/displayH for the blit destination.");
-        // Kotlin variant: u/v are 0f, 0f literals.
-        assertTrue(src.contains("g.blit(tex, displayX, displayY, displayW, displayH, 0f, 0f, SCREEN_W, SCREEN_H"),
-                "MachineScreen must blit with scaled destination dimensions — see the init()/renderBg() "
-                        + "pair. If you changed the blit signature, update this test with the new contract.");
+        // The framebuffer blit moved into the owo Surface lambda
+        // (`displaySurface = Surface { ctx, c -> ... }`), where the rect
+        // dimensions come from the laid-out component (`c.width()` /
+        // `c.height()` → local `w` / `h`) — the scaled values supplied by
+        // `computeDisplaySize`. We grep for the lambda's blit shape rather
+        // than MachineScreen's old direct `g.blit(...)` call.
+        assertTrue(src.contains("ctx.blit(tex, x, y, w, h, 0f, 0f, SCREEN_W, SCREEN_H"),
+                "MachineScreen's displaySurface must blit with the laid-out component dimensions "
+                        + "(scaled by displayScale via computeDisplaySize). If you changed the blit "
+                        + "signature or the Surface variable names, update this test with the new contract.");
     }
 
     @Test
@@ -85,25 +98,27 @@ class MachineScreenLayoutTest {
     @Test
     @DisplayName("MachineScreen hides inventory slots + labels — framebuffer view has no inventory UI")
     void hidesInventoryUi() throws IOException {
-        String src = read();
-        // Kotlin: `override fun renderSlot(...)` with empty `{}` body.
+        // Inherited from ScevDisplayScreen — every framebuffer-backed screen
+        // shares the no-op overrides.
+        String src = readBase();
         assertTrue(src.contains("override fun renderSlot"),
-                "MachineScreen must override renderSlot to a no-op — the menu's player-inventory slots "
-                        + "exist only to avoid shift-click crashes, not to be shown.");
+                "ScevDisplayScreen must override renderSlot to a no-op — the menu's player-inventory "
+                        + "slots exist only to avoid shift-click crashes, not to be shown.");
         assertTrue(src.contains("override fun renderLabels"),
-                "MachineScreen must override renderLabels so the default 'Inventory' text doesn't "
+                "ScevDisplayScreen must override renderLabels so the default 'Inventory' text doesn't "
                         + "print across the framebuffer.");
     }
 
     @Test
     @DisplayName("MachineScreen explicitly drops widget focus so keys reach the VM")
     void setFocusedNullInInit() throws IOException {
-        String src = read();
-        // Kotlin property syntax: `focused = null` in init().
+        // Inherited from ScevDisplayScreen — focus-clearing is a base-class
+        // contract so the per-screen `init()` overrides can't forget it.
+        String src = readBase();
         assertTrue(src.contains("focused = null"),
-                "MachineScreen.init() must clear widget focus after adding the power/reset "
-                        + "buttons. Otherwise a focused button would swallow SPACE/ENTER before our "
-                        + "keyPressed override can forward them to the VM.");
+                "ScevDisplayScreen.init() must clear widget focus after adding any vanilla widgets. "
+                        + "Otherwise a focused button would swallow SPACE/ENTER before our keyPressed "
+                        + "override can forward them to the VM.");
     }
 
     @Test
@@ -117,5 +132,9 @@ class MachineScreenLayoutTest {
 
     private static String read() throws IOException {
         return Files.readString(SCREEN);
+    }
+
+    private static String readBase() throws IOException {
+        return Files.readString(BASE);
     }
 }

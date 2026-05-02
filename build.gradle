@@ -326,17 +326,33 @@ dependencies {
     // `100.fill`, `verticalFlow { … }` ergonomics with zero external dep.
 }
 
+// jar (and run* tasks below) depend on syncGeneratedResources, not runData
+// directly: the Copy task overlays src/generated/resources/ onto
+// build/resources/main/ AFTER both processResources and runData have run,
+// which is the only way the data-pack resources reach the runtime
+// classpath jar bundles / dev runs read.
 tasks.named('jar').configure {
-    // runData (via NeoForge's `data` run) emits blockstate JSONs and item
-    // model JSONs into src/generated/resources, which sourceSets above
-    // registers as an additional resource root. Without this dependency a
-    // clean `./gradlew build` produces a jar with no blockstates / models,
-    // which renders as pink "missing texture" in-game — that's the symptom
-    // we hit after the clean/jar cycle didn't run datagen. Committing the
-    // generated/ dir would also work but the NeoForge convention keeps
-    // them out of git and regenerates them on demand.
-    dependsOn 'runData'
+    dependsOn 'syncGeneratedResources'
 }
+
+// processResources runs early, before runData has populated
+// src/generated/resources/, so build/resources/main/ ends up missing
+// the data-pack resources runData emits (e.g. the empty structure
+// template @GameTest needs). Adding processResources.dependsOn runData
+// — or even mustRunAfter — creates the cycle
+//   classes → processResources → runData → classes
+// (runData is a JavaExec needing classes). Sidestep with a Copy task
+// that overlays the generated dir on top of build/resources/main/
+// after both processResources and runData have run.
+tasks.register('syncGeneratedResources', Copy) {
+    dependsOn 'runData'
+    mustRunAfter 'processResources'
+    from 'src/generated/resources'
+    into "${buildDir}/resources/main"
+}
+
+tasks.matching { it.name in ['runGameTestServer', 'runClient', 'runServer'] }
+        .configureEach { dependsOn 'syncGeneratedResources' }
 
 tasks.withType(JavaCompile).configureEach {
     options.encoding = 'UTF-8'
@@ -364,10 +380,12 @@ processResources {
 
 test {
     useJUnitPlatform()
-    // The asset + construction tests read source files with paths relative to the
-    // project root. Pin the working dir so they don't depend on Gradle's default.
+    // Asset / construction tests read paths relative to the project root.
     workingDir = project.projectDir
     systemProperty 'scev.projectDir', project.projectDir.absolutePath
+    // Several tests assert against files runData emits into
+    // src/generated/resources/.
+    dependsOn 'runData'
 }
 
 // Native libraries live under src/main/resources/natives/<classifier>/ so they're on

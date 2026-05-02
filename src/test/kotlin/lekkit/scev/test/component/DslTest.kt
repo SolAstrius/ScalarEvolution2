@@ -198,13 +198,13 @@ class DslTest {
             fromTerminal(access = { FakeTerm() })
         }
         val term = built.descriptor.plugins.single()
-        assertEquals("terminal", term.slug)
+        assertEquals("vt100", term.slug)
         val paths = term.properties.map { it.path }.toSet()
         assertTrue("width" in paths)
         assertTrue("height" in paths)
         assertTrue("cursor_x" in paths)
         for (row in 0..3) assertTrue("lines/$row" in paths)
-        assertEquals("row 2", built.handlers.readers.getValue("terminal/lines/2")())
+        assertEquals("row 2", built.handlers.readers.getValue("vt100/lines/2")())
     }
 
     // =================================================================
