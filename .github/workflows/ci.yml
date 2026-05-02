@@ -7,6 +7,14 @@ on:
     branches: [main, master]
   workflow_dispatch:
 
+# Cancel superseded runs on the same branch/PR — a force-push or rapid
+# succession of pushes shouldn't burn minutes on stale commits. Pushes to
+# main keep their runs (cancel-in-progress=false there) so post-merge CI
+# always completes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/master' }}
+
 env:
   # pufit/RVVM#staging carries the pluggable HDA backend + JNI ring API
   # the mod's audio pipeline depends on; flip back to LekKit/RVVM once
@@ -29,10 +37,23 @@ jobs:
           repository: pufit/RVVM
           ref: ${{ env.RVVM_REF }}
           path: RVVM
+      - name: Resolve RVVM SHA
+        id: rvvm-sha
+        run: echo "sha=$(git -C RVVM rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      # Cache key includes ci.yml hash so any change to build flags / sed
+      # patches invalidates. Each `staging` advance also invalidates via SHA.
+      - name: Cache librvvm
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: RVVM/${{ matrix.target.reldir }}/${{ matrix.target.outname }}
+          key: librvvm-${{ matrix.target.classifier }}-${{ steps.rvvm-sha.outputs.sha }}-${{ hashFiles('.github/workflows/ci.yml') }}
       - uses: mlugg/setup-zig@v2
+        if: steps.cache.outputs.cache-hit != 'true'
         with:
           version: 0.15.2
       - name: Build librvvm (${{ matrix.target.classifier }})
+        if: steps.cache.outputs.cache-hit != 'true'
         run: |
           cd RVVM
           if [ "${{ matrix.target.os }}" = "windows" ]; then
@@ -76,14 +97,26 @@ jobs:
           - { triple: x86_64-windows-gnu, os: mingw_nt, arch: x86_64, classifier: windows-x86_64, jni_dir: vendored-win32,  outname: scev_h264.dll      }
     steps:
       - uses: actions/checkout@v4
+      # Cache key tracks the vendored OpenH264 tree, our JNI wrapper
+      # sources/Makefile, and ci.yml (build flags). Vendor bumps and any
+      # workflow change invalidate; otherwise the .so/.dylib/.dll is reused.
+      - name: Cache libscev_h264
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ matrix.target.outname }}
+          key: libscev_h264-${{ matrix.target.classifier }}-${{ hashFiles('vendor/openh264/**', 'native/openh264-jni/**', '.github/workflows/ci.yml') }}
       - uses: mlugg/setup-zig@v2
+        if: steps.cache.outputs.cache-hit != 'true'
         with:
           version: 0.15.2
       - uses: actions/setup-java@v4
+        if: steps.cache.outputs.cache-hit != 'true'
         with:
           distribution: temurin
           java-version: '21'
       - name: Build libscev_h264 (${{ matrix.target.classifier }})
+        if: steps.cache.outputs.cache-hit != 'true'
         run: |
           case "${{ matrix.target.jni_dir }}" in
             jdk)              JNI_PI="$JAVA_HOME/include/linux" ;;
