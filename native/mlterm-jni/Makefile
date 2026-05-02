@@ -67,9 +67,14 @@ all: $(OUTPUT) install-helpers
 MLTERM_CONFIGURE_STAMP := $(MLTERM_SRC)/.scev-configured
 configure-mlterm: $(MLTERM_CONFIGURE_STAMP)
 $(MLTERM_CONFIGURE_STAMP): $(MLTERM_SRC)/configure.in
+	# autoreconf -fi runs the full aclocal → autoheader → autoconf →
+	# automake sequence and pulls in missing aux files. The previous
+	# ad-hoc autoconf+automake pair was suppressing automake errors,
+	# which masked missing Makefile.in regen in tool/<helper>/ on
+	# fresh clones — those then failed at build-mlterm with "no
+	# makefile found".
 	cd $(MLTERM_SRC) && \
-	  autoconf -f && \
-	  automake --add-missing --copy --foreign 2>/dev/null || true && \
+	  autoreconf -fi && \
 	  CC="$(CC)" ./configure \
 	    --with-gui=fb \
 	    --enable-fb-embed \
@@ -101,10 +106,14 @@ build-mlterm: configure-mlterm
 	# main_loop.o + daemon.o are object files (not a lib) — build
 	# them individually so we can pick them up at the link step.
 	$(MAKE) -C $(MLTERM_SRC)/main main_loop.o daemon.o
-	# libexec helpers (registobmp + mlimgloader) — install-helpers
-	# pulls them from these subdirs.
-	$(MAKE) -C $(MLTERM_SRC)/tool/registobmp
-	$(MAKE) -C $(MLTERM_SRC)/tool/mlimgloader
+	# libexec helpers (registobmp + mlimgloader). Optional — runtime
+	# falls back to in-process stb_image if they aren't built. Their
+	# Makefiles are only generated when configure picked up
+	# --with-tools properly; on some autotools setups they don't get
+	# regenerated. -$(MAKE) ignores the recursion failure when the
+	# subdir Makefile is missing.
+	-$(MAKE) -C $(MLTERM_SRC)/tool/registobmp
+	-$(MAKE) -C $(MLTERM_SRC)/tool/mlimgloader
 
 # Step 2: link our JNI shim against mlterm's static archives.
 SHIM_SRCS := scev_term.c scev_term_jni.c
@@ -183,12 +192,17 @@ install-helpers: build-mlterm
 	# tools and platforms — registobmp ends up at tool/foo/foo
 	# while mlimgloader lands in tool/foo/.libs/foo. Try the .libs
 	# path first (the real ELF), fall back to the wrapper-named
-	# top-level path.
+	# top-level path. Helpers are optional (runtime fallback is
+	# in-process stb_image) — missing binaries log a warning and
+	# don't fail the install.
 	@for tool in mlimgloader registobmp; do \
 	  src="$(MLTERM_SRC)/tool/$$tool/.libs/$$tool"; \
 	  test -f "$$src" || src="$(MLTERM_SRC)/tool/$$tool/$$tool"; \
-	  test -f "$$src" || { echo "$$tool not built at expected path"; exit 1; }; \
-	  cp "$$src" "$(LIBEXEC_DIR)/mlterm/$$tool"; \
+	  if [ -f "$$src" ]; then \
+	    cp "$$src" "$(LIBEXEC_DIR)/mlterm/$$tool"; \
+	  else \
+	    echo "warning: $$tool not built — runtime falls back to in-process stb_image"; \
+	  fi; \
 	done
 
 clean:
