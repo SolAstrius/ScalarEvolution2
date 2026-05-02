@@ -10,7 +10,6 @@ import static org.junit.jupiter.api.Assertions.*;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -27,13 +26,8 @@ import org.junit.jupiter.api.Test;
  */
 class MachineScreenLayoutTest {
 
-    private static final Path SCREEN = projectRoot()
-            .resolve("src/main/java/lekkit/scev/client/screen/MachineScreen.java");
-
-    private static Path projectRoot() {
-        String override = System.getProperty("scev.projectDir");
-        return override != null ? Paths.get(override) : Paths.get("").toAbsolutePath();
-    }
+    private static final Path SCREEN = SourcePackages.find("lekkit/scev/client/screen/MachineScreen")
+            .orElseThrow(() -> new AssertionError("MachineScreen source not found"));
 
     @Test
     @DisplayName("MachineScreen computes a display scale that fits the window")
@@ -42,33 +36,37 @@ class MachineScreenLayoutTest {
         assertTrue(src.contains("displayScale"),
                 "MachineScreen must store a computed display scale — a 1:1 native blit of "
                         + "the 640×480 framebuffer doesn't fit in most GUI-scale settings.");
-        assertTrue(src.contains("this.width") && src.contains("this.height"),
-                "MachineScreen must read the actual window dimensions (this.width / this.height) to "
-                        + "decide the display size.");
-        assertTrue(src.contains("Math.min"),
+        // Kotlin properties: bare `width` / `height`. No `this.` qualifier.
+        assertTrue(src.contains("width") && src.contains("height"),
+                "MachineScreen must read the actual window dimensions to decide the display size.");
+        assertTrue(src.contains("minOf"),
                 "MachineScreen must pick the smaller of scaleX/scaleY to preserve the 4:3 aspect.");
     }
 
     @Test
-    @DisplayName("MachineScreen never upscales above native 640×480")
-    void neverUpscalesAboveNative() throws IOException {
+    @DisplayName("MachineScreen caps displayScale (never upscales past the chosen target)")
+    void capsDisplayScale() throws IOException {
         String src = read();
-        // Locked in by the `Math.min(1.0f, ...)` clamp in init(). We check
-        // structurally that init() caps the scale at 1.0.
-        assertTrue(src.contains("Math.min(1.0f"),
-                "MachineScreen must clamp displayScale at ≤ 1.0 so a huge window doesn't "
-                        + "pixelate the framebuffer. Use Math.min(1.0f, ...).");
+        // Cap is now expressed as `minOf(DEFAULT_SCALE, ...)` — DEFAULT_SCALE
+        // sits at 0.5 (half native) so the framebuffer renders at a vanilla-
+        // inventory-ish footprint after MC's GUI scale is applied, instead of
+        // taking up most of the player's monitor. Locked in by source grep so
+        // the cap doesn't accidentally turn into "fit window" again.
+        assertTrue(src.contains("minOf(DEFAULT_SCALE"),
+                "MachineScreen must clamp displayScale via minOf(DEFAULT_SCALE, ...) — "
+                        + "no auto-upscale past the chosen target.");
+        assertTrue(src.contains("DEFAULT_SCALE"),
+                "MachineScreen must define a DEFAULT_SCALE constant for the cap.");
     }
 
     @Test
     @DisplayName("MachineScreen blits framebuffer with destination size from displayScale")
     void blitUsesScaledDestination() throws IOException {
         String src = read();
-        // The scaled blit passes both destination size AND source size to
-        // GuiGraphics.blit so the texture is stretched/shrunk to fit.
         assertTrue(src.contains("displayW") && src.contains("displayH"),
                 "MachineScreen must use separate displayW/displayH for the blit destination.");
-        assertTrue(src.contains("g.blit(tex, displayX, displayY, displayW, displayH, 0, 0, SCREEN_W, SCREEN_H"),
+        // Kotlin variant: u/v are 0f, 0f literals.
+        assertTrue(src.contains("g.blit(tex, displayX, displayY, displayW, displayH, 0f, 0f, SCREEN_W, SCREEN_H"),
                 "MachineScreen must blit with scaled destination dimensions — see the init()/renderBg() "
                         + "pair. If you changed the blit signature, update this test with the new contract.");
     }
@@ -77,8 +75,6 @@ class MachineScreenLayoutTest {
     @DisplayName("MachineScreen maps mouse coords back to framebuffer pixels via scale^-1")
     void mouseCoordsUnscale() throws IOException {
         String src = read();
-        // emitMousePlace must account for scale so the VM sees framebuffer
-        // pixel positions, not GUI-space positions.
         assertTrue(src.contains("emitMousePlace"),
                 "MachineScreen must have an emitMousePlace helper.");
         assertTrue(src.contains("displayScale") && src.contains("scaleInv"),
@@ -90,10 +86,11 @@ class MachineScreenLayoutTest {
     @DisplayName("MachineScreen hides inventory slots + labels — framebuffer view has no inventory UI")
     void hidesInventoryUi() throws IOException {
         String src = read();
-        assertTrue(src.contains("protected void renderSlot") && src.contains("// no-op"),
+        // Kotlin: `override fun renderSlot(...)` with empty `{}` body.
+        assertTrue(src.contains("override fun renderSlot"),
                 "MachineScreen must override renderSlot to a no-op — the menu's player-inventory slots "
                         + "exist only to avoid shift-click crashes, not to be shown.");
-        assertTrue(src.contains("protected void renderLabels"),
+        assertTrue(src.contains("override fun renderLabels"),
                 "MachineScreen must override renderLabels so the default 'Inventory' text doesn't "
                         + "print across the framebuffer.");
     }
@@ -102,8 +99,9 @@ class MachineScreenLayoutTest {
     @DisplayName("MachineScreen explicitly drops widget focus so keys reach the VM")
     void setFocusedNullInInit() throws IOException {
         String src = read();
-        assertTrue(src.contains("this.setFocused(null)"),
-                "MachineScreen.init() must call this.setFocused(null) after adding the power/reset "
+        // Kotlin property syntax: `focused = null` in init().
+        assertTrue(src.contains("focused = null"),
+                "MachineScreen.init() must clear widget focus after adding the power/reset "
                         + "buttons. Otherwise a focused button would swallow SPACE/ENTER before our "
                         + "keyPressed override can forward them to the VM.");
     }

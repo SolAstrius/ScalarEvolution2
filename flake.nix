@@ -55,6 +55,21 @@
             jdk
             zig
             gnumake
+            # mlterm-fb-embed build deps. mlterm uses old autoconf
+            # (no automake), needs gettext/glib for AM_GLIB_GNU_GETTEXT,
+            # SDL2 for registobmp, freetype/fontconfig/libpng for the
+            # font + image loading paths.
+            autoconf
+            automake
+            m4
+            pkg-config
+            gettext
+            glib
+            SDL2
+            libpng
+            libssh2
+            freetype
+            fontconfig
           ];
 
           shellHook = ''

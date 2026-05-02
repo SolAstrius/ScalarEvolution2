@@ -11,7 +11,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import lekkit.scev.rpc.MsgPack;
-import lekkit.scev.rpc.MsgValue;
+import lekkit.scev.core.rpc.MsgValue;
 import org.junit.jupiter.api.Test;
 
 final class MsgPackTest {

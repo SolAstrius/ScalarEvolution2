@@ -1,0 +1,22 @@
+{
+  "vertex": "scev:crt_fx",
+  "fragment": "scev:crt_fx",
+  "attributes": [
+    "Position",
+    "UV0",
+    "Color"
+  ],
+  "samplers": [
+    { "name": "Sampler0" }
+  ],
+  "uniforms": [
+    { "name": "ModelViewMat", "type": "matrix4x4", "count": 16, "values": [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0] },
+    { "name": "ProjMat",      "type": "matrix4x4", "count": 16, "values": [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0] },
+    { "name": "TexHeightPx",  "type": "float",     "count": 1,  "values": [312.0] },
+    { "name": "TexWidthPx",   "type": "float",     "count": 1,  "values": [480.0] },
+    { "name": "Curvature",    "type": "float",     "count": 1,  "values": [0.10] },
+    { "name": "Vignette",     "type": "float",     "count": 1,  "values": [0.30] },
+    { "name": "Bloom",        "type": "float",     "count": 1,  "values": [0.20] },
+    { "name": "ApertureMask", "type": "float",     "count": 1,  "values": [0.00] }
+  ]
+}

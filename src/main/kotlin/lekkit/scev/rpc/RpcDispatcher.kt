@@ -5,6 +5,10 @@
  */
 package lekkit.scev.rpc
 
+import lekkit.scev.core.rpc.MsgValue
+import lekkit.scev.core.rpc.RpcHandler
+import lekkit.scev.core.rpc.RpcProtocol
+
 import com.mojang.logging.LogUtils
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CancellationException
@@ -45,19 +49,19 @@ class RpcDispatcher {
      */
     @Throws(CancellationException::class)
     suspend fun dispatch(req: RpcFrame.Request): RpcFrame.Response {
-        val handler = handlers[req.method()]
-            ?: return RpcFrame.error(req.id(), "unknown method: ${req.method()}")
-        val args: List<MsgValue> = req.args() ?: emptyList()
+        val handler = handlers[req.method]
+            ?: return RpcFrame.error(req.id, "unknown method: ${req.method}")
+        val args: List<MsgValue> = req.args ?: emptyList()
         return try {
             val result = handler.invoke(args)
-            RpcFrame.ok(req.id(), result ?: MsgValue.NIL)
+            RpcFrame.ok(req.id, result ?: MsgValue.NIL)
         } catch (e: CancellationException) {
             throw e
         } catch (e: RpcHandler.RpcException) {
-            RpcFrame.error(req.id(), e.message)
+            RpcFrame.error(req.id, e.message ?: "rpc error")
         } catch (e: RuntimeException) {
-            LOG.warn("RPC handler {} threw", req.method(), e)
-            RpcFrame.error(req.id(), "internal error")
+            LOG.warn("RPC handler {} threw", req.method, e)
+            RpcFrame.error(req.id, "internal error")
         }
     }
 

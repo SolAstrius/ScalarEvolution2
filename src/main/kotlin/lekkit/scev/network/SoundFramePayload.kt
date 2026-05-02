@@ -7,7 +7,7 @@ package lekkit.scev.network
 
 import io.netty.buffer.ByteBuf
 import java.util.UUID
-import lekkit.scev.common.Micros
+import lekkit.scev.core.time.Micros
 import net.minecraft.network.codec.StreamCodec
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload
 

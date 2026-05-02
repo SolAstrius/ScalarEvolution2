@@ -28,14 +28,14 @@ class DiskTemplateRegistryTest {
     static void bootstrap() { Bootstrap.bootStrap(); }
 
     @BeforeEach
-    void reset() { DiskTemplateRegistry.clearForTests(); }
+    void reset() { DiskTemplateRegistry.INSTANCE.clearForTests(); }
 
     @Test
     @DisplayName("Empty registry: size 0, get null, no ids")
     void emptyRegistry() {
-        assertEquals(0, DiskTemplateRegistry.size());
+        assertEquals(0, DiskTemplateRegistry.INSTANCE.size());
         assertNull(DiskTemplateRegistry.get(ResourceLocation.fromNamespaceAndPath("scev", "any")));
-        assertTrue(DiskTemplateRegistry.ids().isEmpty());
+        assertTrue(DiskTemplateRegistry.INSTANCE.ids().isEmpty());
     }
 
     @Test
@@ -50,10 +50,10 @@ class DiskTemplateRegistryTest {
     void registerAndLookup() {
         ResourceLocation id = ResourceLocation.fromNamespaceAndPath("testmod", "alpine");
         ScevDiskTemplate tpl = new ToyTemplate("alpine.ext4", 1024);
-        DiskTemplateRegistry.register(id, tpl);
+        DiskTemplateRegistry.INSTANCE.register(id, tpl);
         assertSame(tpl, DiskTemplateRegistry.get(id));
         assertTrue(DiskTemplateRegistry.contains(id));
-        assertEquals(1, DiskTemplateRegistry.size());
+        assertEquals(1, DiskTemplateRegistry.INSTANCE.size());
     }
 
     @Test
@@ -62,8 +62,8 @@ class DiskTemplateRegistryTest {
         ResourceLocation id = ResourceLocation.fromNamespaceAndPath("testmod", "dup");
         ScevDiskTemplate first = new ToyTemplate("first.ext2", 1024);
         ScevDiskTemplate second = new ToyTemplate("second.ext2", 2048);
-        DiskTemplateRegistry.register(id, first);
-        DiskTemplateRegistry.register(id, second);
+        DiskTemplateRegistry.INSTANCE.register(id, first);
+        DiskTemplateRegistry.INSTANCE.register(id, second);
         assertSame(first, DiskTemplateRegistry.get(id));
     }
 
@@ -72,14 +72,14 @@ class DiskTemplateRegistryTest {
     void validation() {
         ResourceLocation id = ResourceLocation.fromNamespaceAndPath("testmod", "bad");
         assertThrows(NullPointerException.class,
-                () -> DiskTemplateRegistry.register(null, new ToyTemplate("a.ext2", 16)));
+                () -> DiskTemplateRegistry.INSTANCE.register(null, new ToyTemplate("a.ext2", 16)));
         assertThrows(NullPointerException.class,
-                () -> DiskTemplateRegistry.register(id, null));
+                () -> DiskTemplateRegistry.INSTANCE.register(id, null));
         assertThrows(IllegalArgumentException.class,
-                () -> DiskTemplateRegistry.register(id, new ToyTemplate("", 16)),
+                () -> DiskTemplateRegistry.INSTANCE.register(id, new ToyTemplate("", 16)),
                 "empty asset name is invalid");
         assertThrows(IllegalArgumentException.class,
-                () -> DiskTemplateRegistry.register(id, new ToyTemplate("a.ext2", 0)),
+                () -> DiskTemplateRegistry.INSTANCE.register(id, new ToyTemplate("a.ext2", 0)),
                 "zero size is invalid");
     }
 
@@ -87,7 +87,7 @@ class DiskTemplateRegistryTest {
     @DisplayName("registerBuiltins installs BUILDROOT + ALPINE disk templates")
     void builtinsInstallsBuildroot() {
         DiskTemplateRegistry.registerBuiltins();
-        assertEquals(2, DiskTemplateRegistry.size(),
+        assertEquals(2, DiskTemplateRegistry.INSTANCE.size(),
                 "Two built-in templates today (BUILDROOT + ALPINE). If you added another, "
                         + "update this test AND add targeted coverage for the new template's "
                         + "metadata (assetName/sizeMb/displayName).");
@@ -106,9 +106,9 @@ class DiskTemplateRegistryTest {
     @DisplayName("registerBuiltins is idempotent")
     void registerBuiltinsIdempotent() {
         DiskTemplateRegistry.registerBuiltins();
-        int firstCount = DiskTemplateRegistry.size();
+        int firstCount = DiskTemplateRegistry.INSTANCE.size();
         DiskTemplateRegistry.registerBuiltins();
-        assertEquals(firstCount, DiskTemplateRegistry.size(),
+        assertEquals(firstCount, DiskTemplateRegistry.INSTANCE.size(),
                 "Second registerBuiltins() call must not re-add entries — duplicate-registration "
                         + "guard protects against crashed-then-retried mod init.");
     }

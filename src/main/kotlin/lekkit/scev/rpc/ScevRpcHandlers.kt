@@ -5,6 +5,10 @@
  */
 package lekkit.scev.rpc
 
+import lekkit.scev.core.rpc.MsgValue
+import lekkit.scev.core.rpc.RpcHandler
+import lekkit.scev.core.rpc.RpcProtocol
+
 import com.mojang.logging.LogUtils
 import lekkit.scev.blocks.DirectionalBlock
 import lekkit.scev.server.MachineManager

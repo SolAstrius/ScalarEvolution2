@@ -11,7 +11,7 @@ import lekkit.scev.blockentity.ComputerCaseBlockEntity;
 import lekkit.scev.blockentity.KeyboardBlockEntity;
 import lekkit.scev.blockentity.PowermarkBlockEntity;
 import lekkit.scev.blockentity.TinkerpadBlockEntity;
-import lekkit.scev.blockentity.VT100BlockEntity;
+import lekkit.scev.blockentity.TerminalBlockEntity;
 import lekkit.scev.blockentity.WorkstationBlockEntity;
 import lekkit.scev.items.MotherboardInventory;
 import lekkit.scev.items.MotherboardItem;
@@ -70,10 +70,10 @@ public final class ScevGameTests {
     }
 
     @GameTest(templateNamespace = ScalarEvolution.MODID, template = "empty")
-    public static void place_vt100(GameTestHelper helper) {
+    public static void place_terminal(GameTestHelper helper) {
         BlockPos pos = new BlockPos(1, 1, 1);
         helper.setBlock(pos, ScevRegistry.VT100.get().defaultBlockState());
-        if (!(helper.getBlockEntity(pos) instanceof VT100BlockEntity)) {
+        if (!(helper.getBlockEntity(pos) instanceof TerminalBlockEntity)) {
             helper.fail("VT100 block entity not created at " + pos);
             return;
         }
@@ -555,66 +555,6 @@ public final class ScevGameTests {
             return;
         }
         helper.succeed();
-    }
-
-    /**
-     * VT100 auto-link: place a workstation with a VGA card next to a VT100
-     * block, power on, verify the VT100 resolves its linked machine to the
-     * workstation's UUID.
-     */
-    @GameTest(templateNamespace = ScalarEvolution.MODID, template = "empty")
-    public static void vt100_links_to_nearby_machine(GameTestHelper helper) {
-        BlockPos casePos = new BlockPos(1, 1, 1);
-        BlockPos vt100Pos = new BlockPos(2, 1, 1);
-        helper.setBlock(casePos, ScevRegistry.WORKSTATION.get().defaultBlockState());
-        helper.setBlock(vt100Pos, ScevRegistry.VT100.get().defaultBlockState());
-
-        if (!(helper.getBlockEntity(casePos) instanceof ComputerCaseBlockEntity case_)) {
-            helper.fail("Workstation BE not created");
-            return;
-        }
-        if (!(helper.getBlockEntity(vt100Pos) instanceof VT100BlockEntity vt100)) {
-            helper.fail("VT100 BE not created");
-            return;
-        }
-
-        // Unlinked until the workstation actually has a running machine with display.
-        UUID preLink = vt100.resolveLinkedMachine();
-        if (preLink != null) {
-            helper.fail("VT100 linked before any machine was running; got " + preLink);
-            return;
-        }
-
-        // Build a workstation with VGA.
-        ItemStack mbStack = new ItemStack(ScevRegistry.MOTHERBOARD1.get());
-        MotherboardInventory inv = new MotherboardInventory(() -> mbStack);
-        inv.setItem(MotherboardItem.SLOT_CPU, new ItemStack(ScevRegistry.CPU1.get()));
-        inv.setItem(MotherboardItem.SLOT_FLASH, new ItemStack(ScevRegistry.FLASH_CHIP.get()));
-        inv.setItem(MotherboardItem.SLOT_RAM_START, new ItemStack(ScevRegistry.RAM_SODIMM1.get()));
-        inv.setItem(MotherboardItem.SLOT_PCI_START, new ItemStack(ScevRegistry.VGA_CARD.get()));
-        case_.setItem(0, mbStack);
-        case_.powerOn();
-
-        try {
-            MachineState state = MachineManager.getMachineState(case_.getMachineUUID());
-            if (state == null || state.getDisplay() == null) {
-                helper.fail("Workstation has no display after powerOn (VGA card missing?)");
-                return;
-            }
-
-            UUID linked = vt100.resolveLinkedMachine();
-            if (linked == null) {
-                helper.fail("VT100 did not link to nearby workstation");
-                return;
-            }
-            if (!linked.equals(case_.getMachineUUID())) {
-                helper.fail("VT100 linked to wrong machine; expected " + case_.getMachineUUID() + " got " + linked);
-                return;
-            }
-            helper.succeed();
-        } finally {
-            case_.powerOff();
-        }
     }
 
     /**
@@ -2015,7 +1955,7 @@ KernelStub.LOAD_ADDR + LINUX_MAGIC_OFFSET, expectedMagic.length);
     public static void all_blocks_place_with_correct_be(GameTestHelper helper) {
         placeAndCheck(helper, 1, 1, 1, ScevRegistry.POWERMARK.get(), PowermarkBlockEntity.class);
         placeAndCheck(helper, 2, 1, 1, ScevRegistry.TINKERPAD.get(), TinkerpadBlockEntity.class);
-        placeAndCheck(helper, 1, 1, 2, ScevRegistry.VT100.get(), VT100BlockEntity.class);
+        placeAndCheck(helper, 1, 1, 2, ScevRegistry.VT100.get(), TerminalBlockEntity.class);
         placeAndCheck(helper, 2, 1, 2, ScevRegistry.CRT_MONITOR.get(),
                 lekkit.scev.blockentity.CRTBlockEntity.class);
         placeAndCheck(helper, 0, 1, 0, ScevRegistry.KEYBOARD.get(), KeyboardBlockEntity.class);
@@ -2097,37 +2037,6 @@ KernelStub.LOAD_ADDR + LINUX_MAGIC_OFFSET, expectedMagic.length);
         if (!originalUuid.equals(reloaded.getMachineUUID())) {
             helper.fail("Machine UUID drifted across NBT round-trip: "
                     + originalUuid + " -> " + reloaded.getMachineUUID());
-            return;
-        }
-        helper.succeed();
-    }
-
-    /**
-     * VT100's linked-machine UUID persists through NBT so a reloaded world
-     * keeps the screen bound to the right case.
-     */
-    @GameTest(templateNamespace = ScalarEvolution.MODID, template = "empty")
-    public static void vt100_link_persists_across_nbt(GameTestHelper helper) {
-        BlockPos pos = new BlockPos(1, 1, 1);
-        helper.setBlock(pos, ScevRegistry.VT100.get().defaultBlockState());
-        if (!(helper.getBlockEntity(pos) instanceof VT100BlockEntity vt100)) {
-            helper.fail("VT100 BE not created"); return;
-        }
-
-        // Force a linked UUID so there's something to persist.
-        UUID testUuid = UUID.fromString("12345678-1234-1234-1234-123456789abc");
-        net.minecraft.nbt.CompoundTag tag = new net.minecraft.nbt.CompoundTag();
-        tag.putUUID("LinkedMachine", testUuid);
-        vt100.loadWithComponents(tag, helper.getLevel().registryAccess());
-
-        // Save and reload.
-        net.minecraft.nbt.CompoundTag saved = vt100.saveWithoutMetadata(helper.getLevel().registryAccess());
-        VT100BlockEntity reloaded = new VT100BlockEntity(pos, vt100.getBlockState());
-        reloaded.loadWithComponents(saved, helper.getLevel().registryAccess());
-
-        if (!testUuid.equals(reloaded.getLinkedMachineUuid())) {
-            helper.fail("VT100 LinkedMachine didn't survive NBT round-trip: expected "
-                    + testUuid + ", got " + reloaded.getLinkedMachineUuid());
             return;
         }
         helper.succeed();

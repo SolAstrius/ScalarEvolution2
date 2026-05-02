@@ -9,9 +9,9 @@ import com.mojang.logging.LogUtils
 import java.util.TreeMap
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
-import lekkit.scev.codec.BgraYuv
-import lekkit.scev.codec.H264Decoder
-import lekkit.scev.common.Micros
+import lekkit.scev.core.codec.BgraYuv
+import lekkit.scev.core.codec.H264Decoder
+import lekkit.scev.core.time.Micros
 import lekkit.scev.network.DisplayPayload
 import lekkit.scev.network.KeyframeRequestPayload
 import lekkit.scev.server.MachineManager
@@ -166,6 +166,17 @@ object DisplayManager {
         MediaClockRegistry.remove(uuid)
     }
 
+    /**
+     * Network handler entry for [lekkit.scev.network.DisplayDisposePayload]
+     * — server has torn down the per-machine encoder, this client should
+     * stop showing the last frame. Drops the cached state + buffered
+     * frames so the next render falls back to "no display" (black).
+     */
+    @JvmStatic
+    fun dispose(uuid: UUID) {
+        destroy(uuid)
+    }
+
     /** Tear down every cached display + jitter buffer. Called on client disconnect. */
     @JvmStatic
     fun recycleAll() {
@@ -179,24 +190,16 @@ object DisplayManager {
 
     /**
      * Network handler entry — called on the Netty network thread for
-     * every arriving [DisplayPayload]. Updates the media clock,
-     * enqueues into the jitter buffer, or short-circuits in SP.
+     * every arriving [DisplayPayload]. Updates the media clock and
+     * enqueues into the jitter buffer (SP also goes through this in
+     * the current `OPTIMIZE_SINGLEPLAYER=false` config).
      *
-     * Two sentinels:
-     *   - `width == 0 || height == 0` → dispose: drop the cached
-     *     DisplayState and any buffered frames for this UUID.
-     *   - SP short-circuit: if a live [MachineManager] entry exists
-     *     locally, skip the remote path entirely; [get] will build a
-     *     zero-copy SP DisplayState on demand.
+     * Stream end is signalled by [lekkit.scev.network.DisplayDisposePayload]
+     * via [dispose], not by an in-band size-0 sentinel.
      */
     @JvmStatic
     fun acceptRemote(payload: DisplayPayload) {
         val uuid = payload.machineUuid
-
-        if (payload.width == 0.toShort() || payload.height == 0.toShort()) {
-            destroy(uuid)
-            return
-        }
 
         if (OPTIMIZE_SINGLEPLAYER && MachineManager.getMachineState(uuid) != null) {
             // In SP the client renderer reads the server-side

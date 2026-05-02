@@ -316,7 +316,7 @@ fun ComponentBuilder.fromFluidTanks(
  * prebuilt.
  */
 fun ComponentBuilder.fromTerminal(
-    slug: String = "terminal",
+    slug: String = "vt100",
     capability: String? = null,
     suitable: () -> Boolean = { true },
     access: () -> TerminalAccess,

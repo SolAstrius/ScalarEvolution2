@@ -46,8 +46,8 @@ class FirmwareInvariantTest {
         // registered firmware without the "load in order" contract needing
         // restatement per class.
         assertTrue(
-            first.kind() == ScevFirmware.Payload.Kind.BOOTROM,
-            "$id first payload is ${first.kind()} — expected BOOTROM so CPU reset has code to fetch",
+            first.kind == ScevFirmware.Payload.Kind.BOOTROM,
+            "$id first payload is ${first.kind} — expected BOOTROM so CPU reset has code to fetch",
         )
     }
 
@@ -55,10 +55,10 @@ class FirmwareInvariantTest {
     @MethodSource("registeredFirmwares")
     fun allPayloadAssetsBundled(id: String, fw: ScevFirmware) {
         fw.payloads().forEach { payload ->
-            assertFalse(payload.asset().isEmpty(), "$id has an empty asset name")
+            assertFalse(payload.asset.isEmpty(), "$id has an empty asset name")
             assertTrue(
-                FirmwareAssets.isBundled(payload.asset()),
-                "$id references asset '${payload.asset()}' which is missing from " +
+                FirmwareAssets.isBundled(payload.asset),
+                "$id references asset '${payload.asset}' which is missing from " +
                     "src/main/resources/assets/scev/firmware/. Either the asset was " +
                     "removed/renamed without updating the firmware, or the mod jar " +
                     "is missing a build step.",

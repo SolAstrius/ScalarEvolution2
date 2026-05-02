@@ -1,0 +1,9 @@
+{
+  "type": "scev:ink_mixing",
+  "ingredients": [
+    { "item": "scev:pigment" },
+    { "tag": "scev:binder" }
+  ],
+  "result": { "id": "scev:ink_jar", "count": 1 },
+  "time": 120
+}

@@ -11,7 +11,6 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -20,7 +19,6 @@ import java.util.Map;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-import java.util.stream.Stream;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -43,40 +41,36 @@ import org.junit.jupiter.api.Test;
  */
 class BlockRenderShapeTest {
 
-    private static Path projectRoot() {
-        String override = System.getProperty("scev.projectDir");
-        return override != null ? Paths.get(override) : Paths.get("").toAbsolutePath();
+    /**
+     * Captures the first parent class name in the file. Matches both Java
+     * ({@code class Foo extends Bar}) and Kotlin ({@code class Foo : Bar} /
+     * {@code class Foo(...) : Bar(...)} / {@code abstract class Foo
+     * protected constructor(...) : Bar(...)}) declarations.
+     */
+    private static final Pattern EXTENDS_CLAUSE = Pattern.compile(
+            "\\bclass\\s+\\w+\\s+extends\\s+(\\w+)|"
+            + "\\bclass\\s+\\w+(?:\\s+protected\\s+constructor)?\\s*(?:\\([^)]*\\))?\\s*:\\s*(\\w+)");
+
+    private static final Pattern RENDER_SHAPE_METHOD = Pattern.compile("\\bgetRenderShape\\s*\\(");
+
+    /** Pull the first parent simple-name out of either a Java or Kotlin declaration. */
+    private static String parentOf(Matcher m) {
+        return m.group(1) != null ? m.group(1) : m.group(2);
     }
 
-    private static final Path BLOCKS_PKG       = projectRoot().resolve("src/main/java/lekkit/scev/blocks");
-    private static final Path BLOCK_ENTITY_PKG = projectRoot().resolve("src/main/java/lekkit/scev/blockentity");
-
-    /**
-     * Every block class that descends from {@code BaseEntityBlock} must end
-     * up inheriting a {@code getRenderShape} override somewhere in its
-     * ancestor chain. We don't require the leaf class to declare it — if the
-     * leaf extends a local intermediate (like {@code DirectionalBlock}) and
-     * that intermediate declares it, the leaf is covered.
-     *
-     * <p>Concretely: scan every .java in the blocks package, find those that
-     * descend (directly or transitively, via an intermediate in the same
-     * tree) from {@code BaseEntityBlock}. For each one, walk the "extends"
-     * chain back through local files. If the leaf OR any local ancestor
-     * declares {@code getRenderShape}, it's fine. Otherwise flag it.
-     */
     @Test
     @DisplayName("Every scev BaseEntityBlock subclass inherits a getRenderShape override")
     void everyBaseEntityBlockHasRenderShape() throws IOException {
         Map<String, String> simpleNameToSource = new HashMap<>();
-        for (Path java : findJavaSources()) {
-            String name = java.getFileName().toString().replace(".java", "");
-            simpleNameToSource.put(name, Files.readString(java, StandardCharsets.UTF_8));
+        for (Path src : SourcePackages.walk("lekkit/scev/blocks", "lekkit/scev/blockentity")) {
+            String fname = src.getFileName().toString();
+            String name = fname.replaceFirst("\\.(java|kt)$", "");
+            simpleNameToSource.put(name, Files.readString(src, StandardCharsets.UTF_8));
         }
 
         List<String> offenders = new ArrayList<>();
         for (Map.Entry<String, String> e : simpleNameToSource.entrySet()) {
             String cls = e.getKey();
-            String src = e.getValue();
             // Not a BaseEntityBlock descendant? skip.
             if (!descendsFromBaseEntityBlock(cls, simpleNameToSource, new HashSet<>())) continue;
             // Walk up the chain, looking for getRenderShape anywhere.
@@ -88,11 +82,8 @@ class BlockRenderShapeTest {
                 "The following scev block classes descend from BaseEntityBlock but no class in "
                         + "their ancestor chain (inside this repo) overrides getRenderShape. "
                         + "BaseEntityBlock defaults to RenderShape.INVISIBLE, so these blocks "
-                        + "render as invisible geometry. Add to the leaf or a shared base:\n\n"
-                        + "    @Override\n"
-                        + "    protected RenderShape getRenderShape(BlockState state) {\n"
-                        + "        return RenderShape.MODEL;\n"
-                        + "    }\n\nOffenders: " + offenders);
+                        + "render as invisible geometry. Add to the leaf or a shared base. "
+                        + "Offenders: " + offenders);
     }
 
     /** Does {@code cls} end up at {@code BaseEntityBlock} walking the extends chain? */
@@ -103,7 +94,7 @@ class BlockRenderShapeTest {
         if (src == null) return false;                   // external class — can't see its ancestry
         Matcher m = EXTENDS_CLAUSE.matcher(src);
         if (!m.find()) return false;
-        String parent = m.group(1);
+        String parent = parentOf(m);
         if ("BaseEntityBlock".equals(parent)) return true;
         return descendsFromBaseEntityBlock(parent, files, seen);
     }
@@ -117,39 +108,30 @@ class BlockRenderShapeTest {
         if (RENDER_SHAPE_METHOD.matcher(src).find()) return true;
         Matcher m = EXTENDS_CLAUSE.matcher(src);
         if (!m.find()) return false;
-        return anyAncestorDeclaresGetRenderShape(m.group(1), files, seen);
-    }
-
-    /** Captures the first {@code extends Foo} simple name in the file. */
-    private static final Pattern EXTENDS_CLAUSE =
-            Pattern.compile("\\bclass\\s+\\w+\\s+extends\\s+(\\w+)");
-    private static final Pattern RENDER_SHAPE_METHOD =
-            Pattern.compile("\\bgetRenderShape\\s*\\(");
-
-    private static List<Path> findJavaSources() throws IOException {
-        List<Path> all = new ArrayList<>();
-        for (Path pkg : new Path[] { BLOCKS_PKG, BLOCK_ENTITY_PKG }) {
-            if (!Files.isDirectory(pkg)) continue;
-            try (Stream<Path> walk = Files.walk(pkg)) {
-                walk.filter(p -> p.toString().endsWith(".java")).forEach(all::add);
-            }
-        }
-        return all;
+        return anyAncestorDeclaresGetRenderShape(parentOf(m), files, seen);
     }
 
     /**
      * Sanity-check that {@code DirectionalBlock.getRenderShape} returns
-     * {@code RenderShape.MODEL} — not some other value that a sloppy refactor
-     * might introduce. We grep because constructing a Block subclass at JUnit
-     * time requires registry bootstrap we'd rather skip.
+     * {@code RenderShape.MODEL} — not some other value that a sloppy
+     * refactor might introduce. We grep because constructing a Block
+     * subclass at JUnit time requires registry bootstrap we'd rather skip.
      */
     @Test
     @DisplayName("DirectionalBlock.getRenderShape returns RenderShape.MODEL (not INVISIBLE)")
     void directionalBlockReturnsModelRenderShape() throws IOException {
-        Path file = BLOCKS_PKG.resolve("DirectionalBlock.java");
+        Path file = SourcePackages.find("lekkit/scev/blocks/DirectionalBlock")
+                .orElseThrow(() -> new AssertionError(
+                        "DirectionalBlock source must exist under src/main/{kotlin,java}/lekkit/scev/blocks"));
         String src = Files.readString(file, StandardCharsets.UTF_8);
+        // Capture the RenderShape constant inside getRenderShape's body.
+        // Tolerates Java method bodies (`{ … return RenderShape.MODEL; }`)
+        // and Kotlin expression bodies with optional return-type annotation
+        // (`fun getRenderShape(...): RenderShape = RenderShape.MODEL`).
         Matcher m = Pattern.compile(
-                "getRenderShape\\s*\\([^)]*\\)\\s*\\{[^}]*return\\s+RenderShape\\.(\\w+)\\s*;",
+                "getRenderShape\\s*\\([^)]*\\)" + // method header up to the closing paren
+                "(?:\\s*:\\s*\\w+)?" +             // optional Kotlin `: RenderShape` return type
+                "\\s*[={][^}]*?RenderShape\\.(\\w+)",
                 Pattern.DOTALL).matcher(src);
         assertTrue(m.find(),
                 "DirectionalBlock.getRenderShape must be present and return a RenderShape "

@@ -45,6 +45,26 @@ repositories {
         url = "https://jitpack.io"
         content { includeGroup "com.github.lostromb.concentus" }
     }
+    // Wisp Forest — owo-lib (declarative GUI framework) and its endec
+    // transitives (io.wispforest.endec:netty/gson/jankson). The
+    // 1.21-Neo branch publishes a Mojmap-mapped neoforge artifact for
+    // direct ModDevGradle consumption.
+    maven {
+        name = "WispForest"
+        url = "https://maven.wispforest.io/releases"
+        content {
+            includeGroup "io.wispforest"
+            includeGroup "io.wispforest.endec"
+        }
+    }
+    // Sinytra — owo-lib pulls forgified-fabric-api:fabric-api-base for
+    // its packet/event abstraction layer on NeoForge. Scoped so we don't
+    // accidentally pull a full Forgified Fabric API tree.
+    maven {
+        name = "Sinytra"
+        url = "https://maven.su5ed.dev/releases"
+        content { includeGroup "org.sinytra.forgified-fabric-api" }
+    }
 }
 
 base {
@@ -59,10 +79,44 @@ java.toolchain.languageVersion = JavaLanguageVersion.of(java_version as Integer)
 // compatible with a runtime we never ship to.
 kotlin {
     jvmToolchain(java_version as Integer)
+    // Context parameters (kotlin 2.2+) — kowo-lib's DSL uses them on the
+    // `root { … }` and `+component` extension surface. Without the flag
+    // every screen built with the DSL would fail to compile with a
+    // "context parameter requires opt-in" warning that promotes to error.
+    compilerOptions {
+        freeCompilerArgs.add('-Xcontext-parameters')
+    }
 }
 
 neoForge {
     version = project.neo_version
+
+    // owo-lib applies NeoForge interface injection on a handful of
+    // vanilla classes (AbstractWidget, EditBox, AbstractContainerMenu,
+    // GuiGraphics, …) so they implement owo's Component /
+    // OwoScreenHandler / etc. supertypes. Compile-time visibility of
+    // those injected supertypes (e.g. so `ButtonComponent` is
+    // assignable to owo's `Component`) requires the data to be on
+    // moddev's `interfaceInjectionData` config — auto-discovery from
+    // dependencies happens at runtime only.
+    //
+    // We do NOT feed owo's access transformer the same way. Owo ships
+    // META-INF/owo.accesstransformer.cfg in its jar; ModDevGradle
+    // applies it at runtime through dependency discovery, but
+    // double-applying it via `accessTransformers.from(...)` here
+    // corrupted the dev MC jar enough that `Minecraft.<init>` died
+    // with NoClassDefFoundError on
+    // net/minecraft/network/chat/FormattedText. The interface
+    // injection didn't cause that crash; the AT did.
+    //
+    // The committed `gradle/owo-accesstransformer.cfg` stays for
+    // drift detection — diff against the dep's META-INF when bumping
+    // the owo version to see what additional methods/classes get
+    // unlocked.
+    interfaceInjectionData {
+        from(file('gradle/owo-interfaces.json'))
+    }
+
 
     runs {
         client {
@@ -208,9 +262,12 @@ dependencies {
     testImplementation 'org.mockito:mockito-core:5.15.2'
     testImplementation 'org.mockito.kotlin:mockito-kotlin:5.4.0'
 
-    // JEI — dev-time recipe browser. runtimeOnly because we don't write any
-    // JEI plugin code (yet); having it in dev makes recipe debugging sane.
-    // Not shipped in the built jar.
+    // JEI — dev-time recipe browser. The compileOnly api line is for the
+    // single JEI plugin we ship: ScevJeiPlugin returns the MachineScreen's
+    // framebuffer panel as an exclusion area so JEI's right-side overlay
+    // hides while the player is interacting with a running guest.
+    compileOnly "mezz.jei:jei-${minecraft_version}-common-api:${jei_version}"
+    compileOnly "mezz.jei:jei-${minecraft_version}-neoforge-api:${jei_version}"
     runtimeOnly "mezz.jei:jei-${minecraft_version}-neoforge:${jei_version}"
 
     // Opus codec (Concentus, pure-Java). Compresses the HDA audio stream:
@@ -235,6 +292,38 @@ dependencies {
     // metadata merge to coexist with moddev's jarJar plugin).
     jarJar(implementation('com.github.lostromb.concentus:Concentus:3885c4e465'))
     additionalRuntimeClasspath 'com.github.lostromb.concentus:Concentus:3885c4e465'
+
+    // owo-lib — declarative GUI framework. Mojmap NeoForge artifact
+    // published from the 1.21-Neo branch's `owo-neo-publish` subproject;
+    // it ships with access transformers + interface-injection metadata
+    // already configured for ModDevGradle, so no AT plumbing on our side.
+    //
+    // The exclude is load-bearing. owo's neo build pulls
+    // `org.sinytra.forgified-fabric-api:fabric-api-base` for its event/
+    // packet abstractions, and any other mod the user has installed that
+    // also provides fabric-api-base (Sodium, Sable, simulated, …) declares
+    // the same JPMS-exported package — `net.fabricmc.fabric.api.event`.
+    // NeoForge's module resolver fails-fast on duplicate exports, so we
+    // exclude our own copy and trust whatever fabric-api-base the user
+    // already has in run/mods (or a sibling mod's jarJar) to satisfy
+    // owo's runtime requirement.
+    // owo-lib ships a META-INF/neoforge.mods.toml — must reach NeoForge as a
+    // discovered mod, not via additionalRuntimeClasspath (which adds it as
+    // a plain JPMS library with no readability into the `minecraft` module,
+    // so BaseOwoHandledScreen → AbstractContainerScreen NoClassDefFoundErrors
+    // at MenuScreens.register time). `implementation` lands on the runtime
+    // classpath where moddev's mod discovery picks up the mods.toml.
+    implementation("io.wispforest:owo-lib-neoforge:${owo_version}") {
+        exclude group: 'org.sinytra.forgified-fabric-api', module: 'fabric-api-base'
+    }
+
+    // kowo-lib (the upstream Kotlin DSL on top of owo) is published as a
+    // Yarn-mapped jar — every method reference inside is `class_2561`,
+    // `class_5250`, etc., which the Mojmap classpath we live on simply
+    // doesn't have. Rather than wire yarn-mappings-patch through our build
+    // we vendored the (~80-line) DSL into src/main/kotlin/.../client/screen/owo/Dsl.kt
+    // as MIT-license-attributed code; it gives us the same `+button(...)`,
+    // `100.fill`, `verticalFlow { … }` ergonomics with zero external dep.
 }
 
 tasks.named('jar').configure {
@@ -566,6 +655,139 @@ tasks.register('buildH264Native') {
 processResources.dependsOn 'buildH264Native'
 
 // --------------------------------------------------------------------
+// mlterm-fb-embed — host-side terminal renderer (xterm-class)
+// --------------------------------------------------------------------
+//
+// Builds libscev_term.{so,dylib,dll} by linking SolAstrius/mlterm-fb-embed
+// (branch fb-embed) statically into native/mlterm-jni/scev_term.c +
+// scev_term_jni.c. Same vendor/JNI shape as openh264 except the source
+// tree lives in a separate fork (out of this repo) — MLTERM_SRC must
+// point at a checkout. CI clones into build/mlterm-src/; dev shells
+// can point at a local working copy directly.
+//
+// Pinned at: SolAstrius/mlterm-fb-embed @ fb-embed (no SHA pin yet —
+// the branch is still moving; pin to a specific SHA once the surface
+// stabilises).
+//
+// Outputs:
+//   src/main/resources/natives/<classifier>/libscev_term.{so,dylib,dll}
+//   src/main/resources/natives/<classifier>/mlterm-libexec/{mlimgloader,registobmp}
+//
+// The libexec helpers ride along beside the .so because mlterm execs
+// them at runtime for image loading + ReGIS rendering. NativeLoader
+// reads MLTERM_LIBEXECDIR from the env (set in the same code path
+// that does System.load) so the .so finds them next to itself.
+
+ext.mltermSrcDefault = file("${buildDir}/mlterm-src")
+ext.mltermFork = 'https://github.com/SolAstrius/mlterm-fb-embed.git'
+ext.mltermRef  = 'fb-embed'
+
+ext.scevTermLibName = {
+    String osn = System.getProperty('os.name').toLowerCase()
+    if (osn.contains('mac'))     return 'libscev_term.dylib'
+    if (osn.contains('windows')) return 'scev_term.dll'
+    return 'libscev_term.so'
+}
+
+/**
+ * Resolve where the mlterm source lives. Honors -PMLTERM_SRC=path
+ * (Gradle property) and MLTERM_SRC (env var) for dev iteration on a
+ * local fork checkout; falls back to build/mlterm-src/ which the
+ * fetchMltermSrc task populates.
+ */
+ext.resolveMltermSrc = {
+    if (project.hasProperty('MLTERM_SRC')) return file(project.MLTERM_SRC)
+    String env = System.getenv('MLTERM_SRC')
+    if (env != null && !env.isEmpty()) return file(env)
+    return mltermSrcDefault
+}
+
+ext.mltermSrcShaFile = file("${buildDir}/mlterm-src.sha")
+
+tasks.register('fetchMltermSrc') {
+    group = 'native'
+    description = "Clone or update ${mltermFork}@${mltermRef} under build/mlterm-src; record HEAD SHA"
+    inputs.property('ref', mltermRef)
+    inputs.property('url', mltermFork)
+    inputs.property('override', project.hasProperty('MLTERM_SRC') ? project.MLTERM_SRC.toString()
+                              : (System.getenv('MLTERM_SRC') ?: ''))
+    outputs.file mltermSrcShaFile
+    outputs.upToDateWhen { false } // always re-check upstream HEAD; stamp file dedupes downstream work
+
+    doLast {
+        def overridden = project.hasProperty('MLTERM_SRC') || System.getenv('MLTERM_SRC') != null
+        def dir = resolveMltermSrc()
+        if (!overridden) {
+            if (!dir.exists()) {
+                dir.parentFile.mkdirs()
+                exec { commandLine 'git', 'clone', '--branch', mltermRef, '--depth', '1', mltermFork, dir.absolutePath }
+            } else {
+                exec { workingDir dir; commandLine 'git', 'fetch', 'origin', mltermRef }
+                exec { workingDir dir; commandLine 'git', 'reset', '--hard', "origin/${mltermRef}" }
+            }
+        }
+        def sha
+        if (dir.exists() && new File(dir, '.git').exists()) {
+            def out = new ByteArrayOutputStream()
+            exec {
+                workingDir dir
+                commandLine 'git', 'rev-parse', 'HEAD'
+                standardOutput = out
+            }
+            sha = out.toString().trim()
+        } else {
+            // Non-git override (e.g. extracted tarball): hash the tree mtime as a fallback signal.
+            sha = "notgit:${dir.absolutePath}:${System.currentTimeMillis()}"
+        }
+        mltermSrcShaFile.parentFile.mkdirs()
+        mltermSrcShaFile.text = sha + '\n'
+    }
+}
+
+tasks.register('buildMltermNative') {
+    group = 'native'
+    description = 'Build libscev_term + mlterm libexec helpers, drop into src/main/resources/natives/'
+    dependsOn 'fetchMltermSrc'
+
+    def jniSrcDir   = file('native/mlterm-jni')
+    def destDir     = file("src/main/resources/natives/${rvvmClassifier()}")
+    def destFile    = new File(destDir, scevTermLibName())
+    def libexecDir  = new File(destDir, 'mlterm-libexec')
+
+    inputs.file(new File(jniSrcDir, 'scev_term.c'))
+    inputs.file(new File(jniSrcDir, 'scev_term_jni.c'))
+    inputs.file(new File(jniSrcDir, 'scev_term.h'))
+    inputs.file(new File(jniSrcDir, 'Makefile'))
+    inputs.property('mltermRef', mltermRef)
+    inputs.file(mltermSrcShaFile).withPropertyName('mltermSrcSha')
+    outputs.file destFile
+    outputs.dir  libexecDir
+
+    doLast {
+        destDir.mkdirs()
+        def mltermSrc = resolveMltermSrc()
+        if (!mltermSrc.exists()) {
+            throw new GradleException("MLTERM_SRC ${mltermSrc} doesn't exist (fetchMltermSrc didn't populate it?)")
+        }
+        def jdkPath = System.getProperty('java.home')
+        logger.lifecycle("Building ${destFile.name} via native/mlterm-jni/Makefile (zig cc, MLTERM_SRC=${mltermSrc})...")
+        exec {
+            workingDir jniSrcDir
+            commandLine 'make', "-j${Runtime.runtime.availableProcessors()}"
+            environment 'JAVA_HOME', jdkPath
+            environment 'MLTERM_SRC', mltermSrc.absolutePath
+            environment 'OUTPUT', destFile.absolutePath
+        }
+        if (!destFile.exists()) {
+            throw new GradleException("mlterm native build did not produce ${destFile} — check `make` output above")
+        }
+        logger.lifecycle("Installed ${destFile.name} -> ${destDir}")
+    }
+}
+
+processResources.dependsOn 'buildMltermNative'
+
+// --------------------------------------------------------------------
 // Alpine preloaded-NVMe image — fetched from scev-alpine's CI release
 // --------------------------------------------------------------------
 // scev-alpine's GitHub Actions workflow rebuilds the sys-install image
@@ -606,16 +828,64 @@ tasks.register('fetchAlpineImage') {
     def archive = file("${cacheDir}/${assetName}")
     def destFile = file('src/main/resources/assets/scev/firmware/alpine_rootfs.img')
 
-    // URL is an input so a pin bump (alpineRel) invalidates the task
-    // and forces a re-download even if the cached archive name happens
-    // to collide. destFile is the output — Gradle's UP-TO-DATE check
-    // skips the whole task when destFile already exists and the URL
-    // hasn't changed.
+    // URL is an input so a pin bump (alpineRel) invalidates the task and
+    // forces a re-download even if the cached archive name happens to
+    // collide. The 'latest' release tag is rolling — CI rebuilds the
+    // sys-install image under the same tag whenever scev-alpine's main
+    // moves — so we also probe the asset's HEAD and feed Last-Modified +
+    // Content-Length in as inputs. That way a CI re-roll on an unchanged
+    // alpineRel still invalidates the task without us having to manually
+    // wipe the cache. Probe is wrapped in a Provider so it runs at
+    // up-to-date check time, not configuration time, and only when this
+    // task is actually in the graph. Probe failures (offline, GitHub
+    // down) collapse to a stable sentinel so air-gapped builds with a
+    // pre-populated cache still succeed.
     inputs.property('downloadUrl', downloadUrl)
+    inputs.property('remoteAssetFingerprint', providers.provider {
+        try {
+            def out = new ByteArrayOutputStream()
+            exec {
+                commandLine 'curl', '-fsSLI', downloadUrl
+                standardOutput = out
+                ignoreExitValue = true
+            }
+            def headers = out.toString('UTF-8').toLowerCase().readLines()
+            def lastMod = headers.findAll { it.startsWith('last-modified:') }.last()
+            def length  = headers.findAll { it.startsWith('content-length:') }.last()
+            "${lastMod.trim()}|${length.trim()}".toString()
+        } catch (Throwable ignored) {
+            'offline'
+        }
+    })
     outputs.file destFile
 
     doLast {
         cacheDir.mkdirs()
+
+        // Re-fetch when the cached archive's size disagrees with the
+        // upstream asset — covers the case where the cache was populated
+        // before a CI re-roll invalidated the task. The remote fingerprint
+        // input above will already have triggered the task to run; this
+        // check just makes sure the doLast actually pulls fresh bytes
+        // instead of reusing the now-stale on-disk archive.
+        def remoteLength = -1L
+        try {
+            def out = new ByteArrayOutputStream()
+            exec {
+                commandLine 'curl', '-fsSLI', downloadUrl
+                standardOutput = out
+                ignoreExitValue = true
+            }
+            def m = out.toString('UTF-8').toLowerCase().readLines()
+                    .findAll { it.startsWith('content-length:') }.last()
+            remoteLength = Long.parseLong(m.split(':', 2)[1].trim())
+        } catch (Throwable ignored) {
+            // Offline — fall through to whatever's cached.
+        }
+        if (archive.exists() && remoteLength > 0 && archive.length() != remoteLength) {
+            logger.lifecycle("Cached ${archive.name} (${archive.length()} B) differs from upstream (${remoteLength} B); refetching")
+            delete archive
+        }
 
         if (!archive.exists()) {
             logger.lifecycle("Downloading ${assetName} from ${scevAlpineRepo}@${scevAlpineReleaseTag}")

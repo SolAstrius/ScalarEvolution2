@@ -15,7 +15,7 @@ import dan200.computercraft.api.peripheral.WorkMonitor
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.sync.Mutex
 import lekkit.scev.blocks.DirectionalBlock
-import lekkit.scev.rpc.MsgValue
+import lekkit.scev.core.rpc.MsgValue
 import lekkit.scev.rpc.RpcFrame
 import lekkit.scev.rpc.ScevRpcManager
 import lekkit.scev.server.MachineManager

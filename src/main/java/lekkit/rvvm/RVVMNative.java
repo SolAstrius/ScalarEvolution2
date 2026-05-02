@@ -139,8 +139,10 @@ public class RVVMNative {
      * worker. Staging through a native ring and polling from a
      * JVM-native thread sidesteps the attach problem entirely.
      *
-     * <p>Ring capacity: 1 MiB, ~2.7 s at 192 kHz mono 16-bit. Overflow
-     * drops oldest bytes (latency over completeness).
+     * <p>Ring capacity: 1 MiB. Cushion in seconds depends on the rate the
+     * guest configures (the codec advertises 44.1 / 48 / 88.2 / 96 kHz at
+     * 16-bit mono): ~10.9 s at the common-case 48 kHz, ~5.5 s at 96 kHz.
+     * Overflow drops oldest bytes (latency over completeness).
      *
      * @param machine       Pointer to the RVVM machine.
      * @param pciDevOut     One-element long[] receiving the

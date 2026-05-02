@@ -11,8 +11,8 @@ import java.nio.ByteOrder
 import java.util.TreeMap
 import java.util.UUID
 import lekkit.scev.client.MediaClock
-import lekkit.scev.common.MachineClock
-import lekkit.scev.common.Micros
+import lekkit.scev.core.time.MachineClock
+import lekkit.scev.core.time.Micros
 import lekkit.scev.network.DisplayPayload
 import lekkit.scev.network.SoundFramePayload
 import net.minecraft.core.registries.BuiltInRegistries

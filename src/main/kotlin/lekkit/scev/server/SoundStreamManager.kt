@@ -12,7 +12,7 @@ import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.channels.Channel
 import lekkit.rvvm.SoundHDA
 import lekkit.rvvm.SoundSink
-import lekkit.scev.common.tickEach
+import lekkit.scev.core.util.tickEach
 import lekkit.scev.network.SoundFramePayload
 import net.neoforged.bus.api.SubscribeEvent
 import net.neoforged.neoforge.event.tick.ServerTickEvent

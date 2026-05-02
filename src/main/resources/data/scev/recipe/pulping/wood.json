@@ -1,0 +1,6 @@
+{
+  "type": "scev:pulping",
+  "ingredient": { "tag": "scev:pulpable" },
+  "result": { "id": "scev:pulp_slurry", "count": 1 },
+  "time": 100
+}

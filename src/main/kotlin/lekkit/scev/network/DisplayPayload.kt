@@ -7,20 +7,21 @@ package lekkit.scev.network
 
 import io.netty.buffer.ByteBuf
 import java.util.UUID
-import lekkit.scev.common.Micros
+import lekkit.scev.core.time.Micros
 import net.minecraft.network.codec.StreamCodec
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload
 
 /**
  * Server → Client: framebuffer blit broadcast from a running machine.
- * `pixels` is a raw ARGB byte stream (`width * height * 4` bytes).
+ * `pixels` is the encoded H.264 NAL byte stream for the captured frame
+ * (decoded shape: `width * height` BGRA pixels).
  *
  * [ptsMicros] is the capture-time PTS in the per-machine clock shared
  * with [SoundFramePayload]. The client's `MediaClock` keys the jitter
  * buffer by PTS so video presentations stay locked to audio playback.
  *
- * Sentinel: `width == 0 || height == 0` with an empty `pixels` array is
- * the dispose signal — client evicts its cached DisplayState.
+ * Stream end is signalled by [DisplayDisposePayload], not by an
+ * in-band size-0 sentinel — see that class for the rationale.
  */
 data class DisplayPayload(
     @get:JvmName("machineUuid") val machineUuid: UUID,

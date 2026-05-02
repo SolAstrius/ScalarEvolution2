@@ -63,7 +63,7 @@ class ObjLoaderParseTest {
 
     private static final List<String> OBJ_BLOCKS = List.of(
             "workstation", "powermark", "tinkerpad", "crt_monitor",
-            "vt100", "keyboard", "keyboard_mouse");
+            "terminal", "keyboard", "keyboard_mouse");
 
     /**
      * Parses each shipped OBJ through the real {@code ObjModel.parse}, then

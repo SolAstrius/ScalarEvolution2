@@ -7,8 +7,8 @@ package lekkit.scev.client
 
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
-import lekkit.scev.common.Micros
-import lekkit.scev.common.Nanos
+import lekkit.scev.core.time.Micros
+import lekkit.scev.core.time.Nanos
 
 /**
  * Client-side media clock, one per live machine UUID. Anchors

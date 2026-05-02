@@ -7,11 +7,11 @@ package lekkit.scev.test.rpc
 
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.runTest
-import lekkit.scev.rpc.MsgValue
+import lekkit.scev.core.rpc.MsgValue
 import lekkit.scev.rpc.RpcDispatcher
 import lekkit.scev.rpc.RpcFrame
-import lekkit.scev.rpc.RpcHandler
-import lekkit.scev.rpc.RpcProtocol
+import lekkit.scev.core.rpc.RpcHandler
+import lekkit.scev.core.rpc.RpcProtocol
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotNull
@@ -32,32 +32,32 @@ class RpcDispatcherTest {
         d.register("echo") { args -> args[0] }
         val req = RpcFrame.Request(1, "echo", listOf(MsgValue.of("hi")))
         val rsp = d.dispatch(req)
-        assertEquals(1, rsp.id())
-        assertNull(rsp.error())
-        assertEquals("hi", rsp.result().asString())
+        assertEquals(1, rsp.id)
+        assertNull(rsp.error)
+        assertEquals("hi", rsp.result.asString())
     }
 
     @Test fun `unknown method yields error`() = runTest {
         val d = RpcDispatcher()
         val rsp = d.dispatch(RpcFrame.Request(7, "nope", emptyList()))
-        assertEquals(7, rsp.id())
-        assertNotNull(rsp.error())
-        assertTrue(rsp.error()!!.contains("unknown method"))
+        assertEquals(7, rsp.id)
+        assertNotNull(rsp.error)
+        assertTrue(rsp.error!!.contains("unknown method"))
     }
 
     @Test fun `RpcException surfaces message`() = runTest {
         val d = RpcDispatcher()
         d.register("fail") { _ -> throw RpcHandler.RpcException("specific cause") }
         val rsp = d.dispatch(RpcFrame.Request(42, "fail", emptyList()))
-        assertEquals("specific cause", rsp.error())
+        assertEquals("specific cause", rsp.error)
     }
 
     @Test fun `runtime exception is generic`() = runTest {
         val d = RpcDispatcher()
         d.register("boom") { _ -> throw IllegalStateException("SECRET") }
         val rsp = d.dispatch(RpcFrame.Request(0, "boom", emptyList()))
-        assertEquals("internal error", rsp.error())
-        assertFalse(rsp.error()!!.contains("SECRET"), "runtime exception detail must not leak")
+        assertEquals("internal error", rsp.error)
+        assertFalse(rsp.error!!.contains("SECRET"), "runtime exception detail must not leak")
     }
 
     @Test fun `suspending handler completes successfully`() = runTest {
@@ -67,8 +67,8 @@ class RpcDispatcherTest {
             MsgValue.of("done")
         }
         val rsp = d.dispatch(RpcFrame.Request(5, "delayed", emptyList()))
-        assertNull(rsp.error())
-        assertEquals("done", rsp.result().asString())
+        assertNull(rsp.error)
+        assertEquals("done", rsp.result.asString())
     }
 
     @Test fun `suspending handler that throws surfaces RpcException`() = runTest {
@@ -78,7 +78,7 @@ class RpcDispatcherTest {
             throw RpcHandler.RpcException("after sleep")
         }
         val rsp = d.dispatch(RpcFrame.Request(9, "eventually_fails", emptyList()))
-        assertEquals("after sleep", rsp.error())
+        assertEquals("after sleep", rsp.error)
     }
 
     @Test fun `protocol round-trip request`() {
@@ -90,9 +90,9 @@ class RpcDispatcherTest {
         val decoded = RpcProtocol.decode(wire)
         assertTrue(decoded is RpcFrame.Request)
         val r2 = decoded as RpcFrame.Request
-        assertEquals(req.id(), r2.id())
-        assertEquals(req.method(), r2.method())
-        assertEquals(3, r2.args().size)
+        assertEquals(req.id, r2.id)
+        assertEquals(req.method, r2.method)
+        assertEquals(3, r2.args.size)
     }
 
     @Test fun `protocol round-trip response`() {
@@ -100,9 +100,9 @@ class RpcDispatcherTest {
         val decoded = RpcProtocol.decode(RpcProtocol.encode(ok))
         assertTrue(decoded is RpcFrame.Response)
         val r2 = decoded as RpcFrame.Response
-        assertEquals(99, r2.id())
-        assertNull(r2.error())
-        assertEquals(42L, r2.result().asInt())
+        assertEquals(99, r2.id)
+        assertNull(r2.error)
+        assertEquals(42L, r2.result.asInt())
     }
 
     @Test fun `protocol round-trip event`() {
@@ -110,7 +110,7 @@ class RpcDispatcherTest {
         val decoded = RpcProtocol.decode(RpcProtocol.encode(evt))
         assertTrue(decoded is RpcFrame.Event)
         val e2 = decoded as RpcFrame.Event
-        assertEquals("redstone", e2.name())
-        assertEquals(1, e2.args().size)
+        assertEquals("redstone", e2.name)
+        assertEquals(1, e2.args.size)
     }
 }

@@ -44,16 +44,16 @@ class FirmwareRegistryTest {
 
     @BeforeEach
     void resetRegistry() {
-        FirmwareRegistry.clearForTests();
+        FirmwareRegistry.INSTANCE.clearForTests();
     }
 
     @Test
     @DisplayName("Empty registry: get / contains / size / ids")
     void emptyRegistry() {
-        assertEquals(0, FirmwareRegistry.size());
+        assertEquals(0, FirmwareRegistry.INSTANCE.size());
         assertFalse(FirmwareRegistry.contains(FirmwareRegistry.LINUX));
         assertNull(FirmwareRegistry.get(FirmwareRegistry.LINUX));
-        assertTrue(FirmwareRegistry.ids().isEmpty());
+        assertTrue(FirmwareRegistry.INSTANCE.ids().isEmpty());
     }
 
     @Test
@@ -72,11 +72,11 @@ class FirmwareRegistryTest {
         ScevFirmware toy = new ToyFirmware("toy-boot.bin");
 
         assertFalse(FirmwareRegistry.contains(id));
-        FirmwareRegistry.register(id, toy);
+        FirmwareRegistry.INSTANCE.register(id, toy);
         assertTrue(FirmwareRegistry.contains(id));
         assertSame(toy, FirmwareRegistry.get(id));
-        assertEquals(1, FirmwareRegistry.size());
-        assertTrue(FirmwareRegistry.ids().contains(id));
+        assertEquals(1, FirmwareRegistry.INSTANCE.size());
+        assertTrue(FirmwareRegistry.INSTANCE.ids().contains(id));
     }
 
     @Test
@@ -86,14 +86,14 @@ class FirmwareRegistryTest {
         ScevFirmware first = new ToyFirmware("first.bin");
         ScevFirmware second = new ToyFirmware("second.bin");
 
-        FirmwareRegistry.register(id, first);
-        FirmwareRegistry.register(id, second); // should be ignored
+        FirmwareRegistry.INSTANCE.register(id, first);
+        FirmwareRegistry.INSTANCE.register(id, second); // should be ignored
 
         assertSame(first, FirmwareRegistry.get(id),
                 "Duplicate registration must keep the first entry — mods that "
                         + "accidentally re-register a firmware shouldn't swap "
                         + "production firmware with a test stub.");
-        assertEquals(1, FirmwareRegistry.size());
+        assertEquals(1, FirmwareRegistry.INSTANCE.size());
     }
 
     @Test
@@ -101,11 +101,11 @@ class FirmwareRegistryTest {
     void validation() {
         ResourceLocation id = ResourceLocation.fromNamespaceAndPath("testmod", "bad");
         assertThrows(NullPointerException.class,
-                () -> FirmwareRegistry.register(null, new ToyFirmware("a")));
+                () -> FirmwareRegistry.INSTANCE.register(null, new ToyFirmware("a")));
         assertThrows(NullPointerException.class,
-                () -> FirmwareRegistry.register(id, null));
+                () -> FirmwareRegistry.INSTANCE.register(id, null));
         assertThrows(IllegalArgumentException.class,
-                () -> FirmwareRegistry.register(id, new EmptyFirmware()),
+                () -> FirmwareRegistry.INSTANCE.register(id, new EmptyFirmware()),
                 "A firmware with no payloads is useless; registry must reject it");
     }
 
@@ -121,11 +121,11 @@ class FirmwareRegistryTest {
         assertTrue(FirmwareRegistry.contains(FirmwareRegistry.BLINKY),
                 "BLINKY is the bare-metal demo firmware for the upcoming MCU tier; "
                         + "registerBuiltins must install it so flash chips can reference it.");
-        assertEquals(4, FirmwareRegistry.size());
+        assertEquals(4, FirmwareRegistry.INSTANCE.size());
 
         // Every built-in must have at least one payload (BOOTROM) or the
         // backend's assertion-free load loop produces a broken machine.
-        for (ResourceLocation id : FirmwareRegistry.ids()) {
+        for (ResourceLocation id : FirmwareRegistry.INSTANCE.ids()) {
             ScevFirmware fw = FirmwareRegistry.get(id);
             assertNotNull(fw, "get(" + id + ") returned null after registration");
             assertNotNull(fw.payloads(), "firmware " + id + " has null payloads");
@@ -138,9 +138,9 @@ class FirmwareRegistryTest {
     @DisplayName("registerBuiltins is idempotent (safe to call twice)")
     void registerBuiltinsIdempotent() {
         FirmwareRegistry.registerBuiltins();
-        int firstCount = FirmwareRegistry.size();
+        int firstCount = FirmwareRegistry.INSTANCE.size();
         FirmwareRegistry.registerBuiltins(); // dup warnings, no growth
-        assertEquals(firstCount, FirmwareRegistry.size(),
+        assertEquals(firstCount, FirmwareRegistry.INSTANCE.size(),
                 "Second registerBuiltins() must not re-add entries — duplicate-registration "
                         + "guard is what keeps production firmware stable across multiple init calls");
     }
@@ -149,9 +149,9 @@ class FirmwareRegistryTest {
     @DisplayName("clearForTests wipes all entries")
     void clearWorks() {
         FirmwareRegistry.registerBuiltins();
-        assertTrue(FirmwareRegistry.size() > 0);
-        FirmwareRegistry.clearForTests();
-        assertEquals(0, FirmwareRegistry.size());
+        assertTrue(FirmwareRegistry.INSTANCE.size() > 0);
+        FirmwareRegistry.INSTANCE.clearForTests();
+        assertEquals(0, FirmwareRegistry.INSTANCE.size());
         assertNull(FirmwareRegistry.get(FirmwareRegistry.LINUX));
     }
 

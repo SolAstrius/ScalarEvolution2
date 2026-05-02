@@ -58,13 +58,20 @@ docs/
 src/main/resources/assets/scev/firmware/alpine_rootfs.img
 
 # Built natives — produced fresh by CI per platform and dropped into the
-# classifier dirs. Never committed.
+# classifier dirs. Never committed. (History was scrubbed of stale prebuilt
+# librvvm blobs; do not re-add.)
 src/main/resources/natives/*/librvvm.so
 src/main/resources/natives/*/librvvm.dylib
+src/main/resources/natives/*/librvvm.dll
+src/main/resources/natives/*/librvvm.a
 src/main/resources/natives/*/rvvm.dll
 src/main/resources/natives/*/libscev_h264.so
 src/main/resources/natives/*/libscev_h264.dylib
 src/main/resources/natives/*/scev_h264.dll
+src/main/resources/natives/*/libscev_term.so
+src/main/resources/natives/*/libscev_term.dylib
+src/main/resources/natives/*/scev_term.dll
+src/main/resources/natives/*/mlterm-libexec/
 
 # OpenH264 + JNI wrapper build intermediates. We vendor the OpenH264 source
 # under vendor/openh264/ and build it in-place via its own Makefile; the
@@ -79,3 +86,15 @@ native/openh264-jni/*.o
 native/openh264-jni/*.d
 native/openh264-jni/libscev_h264.*
 native/openh264-jni/scev_h264.dll
+
+# mlterm-jni build intermediates. Source lives in
+# SolAstrius/mlterm-fb-embed (see PORT_PLAN.md); JNI shim is here.
+native/mlterm-jni/*.o
+native/mlterm-jni/*.d
+native/mlterm-jni/libscev_term.*
+native/mlterm-jni/scev_term.dll
+native/mlterm-jni/regis_test
+native/mlterm-jni/regis_test.o
+native/mlterm-jni/scev_smoke
+native/mlterm-jni/scev_term.smoke.o
+src/main/resources/scev/mlterm-fonts/.mlterm/

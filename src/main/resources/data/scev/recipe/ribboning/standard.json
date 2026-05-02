@@ -1,0 +1,6 @@
+{
+  "type": "scev:ribboning",
+  "ingredient": { "item": "minecraft:string" },
+  "result": { "id": "scev:ribbon", "count": 1 },
+  "time": 100
+}

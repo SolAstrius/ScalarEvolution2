@@ -60,7 +60,7 @@ class BlockModelRenderingTest {
     /** OBJ-backed blocks whose visual correctness this test class guards. */
     private static final List<String> OBJ_BLOCKS = List.of(
             "workstation", "powermark", "tinkerpad", "crt_monitor",
-            "vt100", "keyboard", "keyboard_mouse");
+            "terminal", "keyboard", "keyboard_mouse");
 
     // ------------------------------------------------------------------------
     // Test: every face in every OBJ has an active `usemtl` when it's declared.

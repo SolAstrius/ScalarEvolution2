@@ -10,10 +10,10 @@ import dan200.computercraft.api.lua.ObjectArguments
 import dan200.computercraft.api.peripheral.IComputerAccess
 import dan200.computercraft.api.peripheral.IPeripheral
 import kotlinx.coroutines.sync.withLock
-import lekkit.scev.rpc.MsgValue
+import lekkit.scev.core.rpc.MsgValue
 import lekkit.scev.rpc.RpcDispatcher
-import lekkit.scev.rpc.RpcHandler
-import lekkit.scev.rpc.RpcProtocol
+import lekkit.scev.core.rpc.RpcHandler
+import lekkit.scev.core.rpc.RpcProtocol
 import java.lang.reflect.Field
 
 /**

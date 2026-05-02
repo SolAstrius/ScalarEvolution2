@@ -26,8 +26,13 @@ import org.jetbrains.annotations.Nullable;
  *       otherwise). Retained for standalone / non-JVM usage.</li>
  * </ul>
  *
- * <p>PCM format is fixed by the HDA codec: 16-bit signed little-endian,
- * mono, 192 kHz.
+ * <p><b>PCM format.</b> 16-bit signed little-endian, mono. Sample rate is
+ * data-driven from the guest's chosen format register (SDnFMT): the codec
+ * advertises 44.1 / 48 / 88.2 / 96 kHz; the worker derives bytes/sec from
+ * whichever the guest selects. Linux's default HDA-Intel PCM picks 48 kHz
+ * unless an app explicitly negotiates otherwise, so 48 kHz is the
+ * common-case operating rate. The codec descriptor has no STEREO bit on
+ * its output widget — guests cannot configure stereo even when they would.
  */
 public class SoundHDA extends PCIDevice {
     /**

@@ -6,8 +6,8 @@
 package lekkit.scev.test.codec
 
 import kotlin.math.abs
-import lekkit.scev.codec.H264Decoder
-import lekkit.scev.codec.H264Encoder
+import lekkit.scev.core.codec.H264Decoder
+import lekkit.scev.core.codec.H264Encoder
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertTrue

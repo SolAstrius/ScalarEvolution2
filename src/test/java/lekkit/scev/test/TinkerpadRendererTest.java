@@ -11,7 +11,6 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.regex.Matcher;
@@ -47,13 +46,9 @@ import org.junit.jupiter.api.Test;
  */
 class TinkerpadRendererTest {
 
-    private static final Path RENDERER = projectRoot()
-            .resolve("src/main/java/lekkit/scev/client/render/blockentity/TinkerpadRenderer.java");
-
-    private static Path projectRoot() {
-        String override = System.getProperty("scev.projectDir");
-        return override != null ? Paths.get(override) : Paths.get("").toAbsolutePath();
-    }
+    private static final Path RENDERER = SourcePackages.find(
+            "lekkit/scev/client/render/blockentity/TinkerpadRenderer")
+            .orElseThrow(() -> new AssertionError("TinkerpadRenderer source not found"));
 
     @Test
     @DisplayName("Renderer emits exactly one quad (4 vertices) on the lid's interior face")
@@ -178,11 +173,15 @@ class TinkerpadRendererTest {
         return out;
     }
 
-    /** Extract a {@code static final float NAME = 0.123f;} value from source. */
+    /**
+     * Extract a `const val NAME: Float = 0.123f` value from Kotlin source.
+     * Same shape as the old Java extractor; Kotlin form has the constant on
+     * its own line inside the renderer's companion object.
+     */
     private static double parseConst(String src, String name) {
         Matcher m = Pattern.compile(
-                "static\\s+final\\s+float\\s+" + Pattern.quote(name)
-                        + "\\s*=\\s*([^;]+);").matcher(src);
+                "const\\s+val\\s+" + Pattern.quote(name)
+                        + "\\s*:\\s*Float\\s*=\\s*([^\\r\\n/]+)").matcher(src);
         assertTrue(m.find(), "constant " + name + " not found in TinkerpadRenderer source");
         return evalExpression(src, m.group(1).trim());
     }

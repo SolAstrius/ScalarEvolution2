@@ -5,6 +5,10 @@
  */
 package lekkit.scev.rpc
 
+import lekkit.scev.core.rpc.MsgValue
+import lekkit.scev.core.rpc.RpcHandler
+import lekkit.scev.core.rpc.RpcProtocol
+
 import com.mojang.logging.LogUtils
 import java.nio.charset.StandardCharsets
 import java.util.UUID
@@ -18,7 +22,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import lekkit.scev.common.ServerScope
-import lekkit.scev.common.tickEach
+import lekkit.scev.core.util.tickEach
 import lekkit.scev.machine.SerialDevice
 import net.neoforged.bus.api.SubscribeEvent
 import net.neoforged.neoforge.event.tick.ServerTickEvent
@@ -95,6 +99,20 @@ class ScevRpcManager private constructor(
     private val kernelConsoleTailBuf: ArrayDeque<String> = ArrayDeque(KERNEL_CONSOLE_TAIL)
 
     /**
+     * Bounded byte ring of recent guest TX. Shipped to late-joining
+     * VT100 viewers so they replay the whole session through their own
+     * mlterm and arrive at the same screen state as everyone who's
+     * been watching from the start. DCS-aware wrap so sixel / ReGIS
+     * payloads aren't truncated mid-stream.
+     *
+     * Lives on [ScevRpcManager] (not on [TerminalBlockEntity]) so the
+     * buffer survives if every block viewer disconnects but the guest
+     * keeps producing output — when someone next opens a screen they
+     * still get the recent backlog.
+     */
+    private val replayBuffer: SerialReplayBuffer = SerialReplayBuffer()
+
+    /**
      * Per-machine [SupervisorJob] parented to [ServerScope.scope]'s
      * job. Cancelling this job:
      *   - stops this machine's in-flight handler coroutines
@@ -163,7 +181,7 @@ class ScevRpcManager private constructor(
     fun responsesOut(): Long = responsesOut
     fun eventsOut(): Long = eventsOut
     fun decodeFailures(): Long = decodeFailures
-    fun droppedFrames(): Long = stream.droppedFrames()
+    fun droppedFrames(): Long = stream.droppedFrames
 
     /* ---------------- tick ---------------- */
 
@@ -193,12 +211,40 @@ class ScevRpcManager private constructor(
         while (true) {
             val kn = console.pollTx(drainBuf)
             if (kn <= 0) break
+            // Capture into the replay ring BEFORE fanning out — that
+            // way the late-joiner replay path covers everything live
+            // viewers have seen, and the ordering is consistent (a
+            // viewer subscribed mid-tick still gets ring-then-live
+            // bytes in a coherent sequence).
+            replayBuffer.write(drainBuf, kn)
+
+            // Fan out raw bytes to every registered sink. The line-
+            // buffered logger below stays subscribed by default;
+            // additional sinks (e.g. an open VT100 terminal block)
+            // get the same chunks and can interpret them however
+            // they want (the terminal keeps CR + LF for proper VT
+            // cursor positioning, the logger strips them).
+            for (sink in consoleSinks) {
+                try {
+                    sink.onConsoleBytes(drainBuf, kn)
+                } catch (t: Throwable) {
+                    LOG.warn("[scev-kernel {}] console sink threw, dropping: {}",
+                        machineUuid, t.toString())
+                }
+            }
             for (i in 0 until kn) {
                 val b = drainBuf[i]
                 if (b == '\n'.code.toByte() || kernelConsoleLineLen == kernelConsoleLine.size) {
                     if (kernelConsoleLineLen > 0) {
+                        // Buffer the line for crash-diagnostic tail dumps
+                        // but DO NOT emit it via SLF4J — every kernel
+                        // printk would drown the Java console at DEBUG
+                        // level, and the player can read live output on
+                        // the actual VT100 terminal block. The tail buf
+                        // is what we want preserved; the log call was
+                        // duplicating that data into log4j with no
+                        // additional value.
                         val line = String(kernelConsoleLine, 0, kernelConsoleLineLen, StandardCharsets.UTF_8)
-                        LOG.debug("[scev-kernel {}] {}", machineUuid, line)
                         if (kernelConsoleTailBuf.size == KERNEL_CONSOLE_TAIL) {
                             kernelConsoleTailBuf.removeFirst()
                         }
@@ -211,6 +257,47 @@ class ScevRpcManager private constructor(
             }
             if (kn < drainBuf.size) break
         }
+    }
+
+    /* ---------------- kernel console pub/sub ---------------- */
+
+    /** Registered fan-out subscribers for guest TX bytes. CopyOnWrite
+     *  because subscribe/unsubscribe is rare (block placement /
+     *  removal) but the drain loop iterates this every server tick. */
+    private val consoleSinks: MutableList<KernelConsoleSink> =
+        java.util.concurrent.CopyOnWriteArrayList()
+
+    /** Subscribe to drained kernel-console TX. Idempotent — adding
+     *  the same instance twice is treated as one subscription. */
+    fun addConsoleSink(sink: KernelConsoleSink) {
+        if (!consoleSinks.contains(sink)) consoleSinks.add(sink)
+    }
+
+    /** Unsubscribe. No-op if the sink wasn't registered. */
+    fun removeConsoleSink(sink: KernelConsoleSink) {
+        consoleSinks.remove(sink)
+    }
+
+    /**
+     * Snapshot of the replay ring — every guest TX byte still in
+     * scope, oldest first. Intended for "VT100 menu just opened, send
+     * the player up to ~256 KiB of recent backlog so they replay
+     * through their local mlterm and see the current screen instead
+     * of black."
+     */
+    fun consoleReplaySnapshot(): ByteArray = replayBuffer.snapshot()
+
+    /**
+     * Push player-typed bytes into the guest's kernel-console RX
+     * queue. Intended for in-game terminal blocks (VT100). Returns
+     * the number of bytes the UART accepted; partial writes are
+     * possible if the RX ring is near-full.
+     *
+     * No-op (returns 0) if no kernel console is attached.
+     */
+    fun feedKernelConsoleInput(bytes: ByteArray): Int {
+        val console = kernelConsole ?: return 0
+        return console.feedRx(bytes)
     }
 
     private fun handleIncoming(payload: ByteArray) {

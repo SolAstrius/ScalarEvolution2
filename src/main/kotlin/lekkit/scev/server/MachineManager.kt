@@ -57,24 +57,24 @@ object MachineManager {
      */
     @JvmStatic
     fun createMachineState(spec: MachineSpec): MachineState? {
-        if (machines.containsKey(spec.uuid())) {
-            LOG.warn("Machine {} already exists", spec.uuid())
+        if (machines.containsKey(spec.uuid)) {
+            LOG.warn("Machine {} already exists", spec.uuid)
             return null
         }
         val backend = factory.create()
         if (!backend.initialize(spec)) {
-            LOG.warn("Failed to initialize backend for machine {}", spec.uuid())
+            LOG.warn("Failed to initialize backend for machine {}", spec.uuid)
             backend.close()
             return null
         }
         val state = MachineState(spec, backend)
-        val existing = machines.putIfAbsent(spec.uuid(), state)
+        val existing = machines.putIfAbsent(spec.uuid, state)
         if (existing != null) {
             // Lost a race against a concurrent create for the same UUID.
             // Destroy the state we just built and return null — the
             // caller's second-create attempt failed, consistent with
             // the containsKey short-circuit above.
-            LOG.warn("Machine {} raced to create; discarding ours", spec.uuid())
+            LOG.warn("Machine {} raced to create; discarding ours", spec.uuid)
             state.destroy()
             return null
         }

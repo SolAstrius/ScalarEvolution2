@@ -59,7 +59,7 @@ class PreloadedNvmeItemTest {
     void restoreBuiltins() {
         // Every test may have stomped the registry — restore the production
         // state so later tests (in any class) see a populated registry.
-        DiskTemplateRegistry.clearForTests();
+        DiskTemplateRegistry.INSTANCE.clearForTests();
         DiskTemplateRegistry.registerBuiltins();
     }
 
@@ -88,7 +88,7 @@ class PreloadedNvmeItemTest {
     @Test
     @DisplayName("With template registered: getOrigin + getSizeMb come from the template")
     void reflectsRegisteredTemplate() {
-        DiskTemplateRegistry.clearForTests();
+        DiskTemplateRegistry.INSTANCE.clearForTests();
         DiskTemplateRegistry.registerBuiltins();
 
         PreloadedNvmeItem item = ScevRegistry.NVME_PRELOADED.get();
@@ -105,7 +105,7 @@ class PreloadedNvmeItemTest {
         // the template (or the user removes a template-providing mod
         // post-install). The item must NOT throw — a world save with a
         // PreloadedNvmeItem whose template vanished should still open.
-        DiskTemplateRegistry.clearForTests();
+        DiskTemplateRegistry.INSTANCE.clearForTests();
         PreloadedNvmeItem item = ScevRegistry.NVME_PRELOADED.get();
 
         assertEquals("rootfs.ext2", item.getOrigin(),

@@ -135,11 +135,11 @@ class MachineSpecTest {
     }
 
     @Test
-    @DisplayName("null nvmeDrives list is treated as empty")
-    void nullNvmeNormalised() {
+    @DisplayName("empty nvmeDrives list round-trips unchanged")
+    void emptyNvmeRoundTrips() {
         MachineSpec s = new MachineSpec(
                 UUID.randomUUID(), 64, 1, "rv64", null, null, null,
-                false, false, false, null, "cmdline",
+                false, false, false, java.util.Collections.emptyList(), "cmdline",
                 MachineSpec.BootromMode.FIRMWARE_ELSE_DEMO);
         assertNotNull(s.nvmeDrives());
         assertTrue(s.nvmeDrives().isEmpty());

@@ -14,10 +14,10 @@ import kotlinx.coroutines.runBlocking
 import lekkit.scev.compat.cc.ScevCCComputer
 import lekkit.scev.compat.cc.ScevCCHandlers
 import lekkit.scev.rpc.MsgPack
-import lekkit.scev.rpc.MsgValue
+import lekkit.scev.core.rpc.MsgValue
 import lekkit.scev.rpc.RpcDispatcher
 import lekkit.scev.rpc.RpcFrame
-import lekkit.scev.rpc.RpcProtocol
+import lekkit.scev.core.rpc.RpcProtocol
 import net.minecraft.server.Bootstrap
 import org.junit.jupiter.api.Assertions.assertArrayEquals
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -304,8 +304,8 @@ class CcPrinterIntegrationTest {
         val dispatcher = RpcDispatcher().also { ScevCCHandlers.install(it, computer) }
         val frame = sendRequestFrame(dispatcher, RpcProtocol.METHOD_CALL,
             listOf(MsgValue.of("left"), MsgValue.of("endPage")))
-        assertNotNull(frame.error(), "endPage without a started page should error")
-        val err = frame.error()!!
+        assertNotNull(frame.error, "endPage without a started page should error")
+        val err = frame.error!!
         // "Page not started" is PrinterPeripheral's thrown LuaException
         // message. The enrichment pipeline in ScevPeripheralMethods
         // appends the signature — we assert it's there.
@@ -328,7 +328,7 @@ class CcPrinterIntegrationTest {
         dispatcher: RpcDispatcher,
         method: String,
         args: List<MsgValue>,
-    ): MsgValue = sendRequestFrame(dispatcher, method, args).result()
+    ): MsgValue = sendRequestFrame(dispatcher, method, args).result
 
     private fun sendRequestFrame(
         dispatcher: RpcDispatcher,
@@ -347,9 +347,9 @@ class CcPrinterIntegrationTest {
 
         // scev's decoder parses our independently-encoded bytes.
         val decoded = RpcProtocol.decode(wireBytes) as RpcFrame.Request
-        assertEquals(method, decoded.method(), "decoder round-trip: method")
-        assertEquals(id, decoded.id(), "decoder round-trip: id")
-        assertEquals(args, decoded.args() ?: emptyList<MsgValue>(), "decoder round-trip: args")
+        assertEquals(method, decoded.method, "decoder round-trip: method")
+        assertEquals(id, decoded.id, "decoder round-trip: id")
+        assertEquals(args, decoded.args ?: emptyList<MsgValue>(), "decoder round-trip: args")
 
         // Dispatch through the real scev CC handler chain.
         val response = runBlocking { dispatcher.dispatch(decoded) }
@@ -357,8 +357,8 @@ class CcPrinterIntegrationTest {
         // scev's encoder → our independent decoder → MsgValue.
         val respBytes = RpcProtocol.encode(response)
         val respDecoded = RpcProtocol.decode(respBytes) as RpcFrame.Response
-        assertEquals(response.id(), respDecoded.id())
-        assertEquals(response.error(), respDecoded.error())
+        assertEquals(response.id, respDecoded.id)
+        assertEquals(response.error, respDecoded.error)
         // Independent decode-and-re-compare: we don't just trust the
         // scev decoder here.
         val independentRoundTrip = MinimalMsgPackDecoder(respBytes).readValue()
