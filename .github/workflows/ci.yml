@@ -214,7 +214,8 @@ jobs:
             pkg-config \
             libfreetype6-dev libfontconfig1-dev \
             libpng-dev libssh2-1-dev \
-            autoconf automake m4 gettext
+            autoconf automake m4 gettext autopoint \
+            libglib2.0-dev intltool
 
       - name: Download librvvm (linux)
         uses: actions/download-artifact@v4
