@@ -36,7 +36,7 @@ class MltermBackendSmokeTest {
     fun helloWorld(@TempDir outDir: Path) {
         assumeTrue(MltermNative.ensureLoaded(), "libscev_term native not available; skipping smoke")
 
-        MltermBackend(80, 24).use { term ->
+        MltermBackend(cols = 80, rows = 24).use { term ->
             // Bold green "hello world" + newline. SGR escape sequences
             // get parsed inside mlterm — proves the parser is alive.
             term.feedString("[1;32mhello world[0m\r\n")
