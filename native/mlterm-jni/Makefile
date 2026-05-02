@@ -67,14 +67,14 @@ all: $(OUTPUT) install-helpers
 MLTERM_CONFIGURE_STAMP := $(MLTERM_SRC)/.scev-configured
 configure-mlterm: $(MLTERM_CONFIGURE_STAMP)
 $(MLTERM_CONFIGURE_STAMP): $(MLTERM_SRC)/configure.in
-	# autoreconf -fi runs the full aclocal → autoheader → autoconf →
-	# automake sequence and pulls in missing aux files. The previous
-	# ad-hoc autoconf+automake pair was suppressing automake errors,
-	# which masked missing Makefile.in regen in tool/<helper>/ on
-	# fresh clones — those then failed at build-mlterm with "no
-	# makefile found".
+	# mlterm ships pre-generated Makefile.in's. autoconf -f refreshes
+	# configure; automake's regen errors are non-fatal because the
+	# pre-committed Makefile.in's already cover us. autoreconf -fi
+	# would tear down aclocal.m4 and conflict with mlterm's bundled
+	# libtool macros, so we deliberately avoid it.
 	cd $(MLTERM_SRC) && \
-	  autoreconf -fi && \
+	  autoconf -f && \
+	  (automake --add-missing --copy --foreign 2>/dev/null || true) && \
 	  CC="$(CC)" ./configure \
 	    --with-gui=fb \
 	    --enable-fb-embed \
