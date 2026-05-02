@@ -200,12 +200,21 @@ jobs:
 
       # Build job re-runs buildH264Native / buildMltermNative through
       # processResources even though the artifacts are pre-downloaded —
-      # Gradle has no prior state on a fresh runner. zig must be present
-      # so those tasks succeed (they re-link a binary identical to the
-      # downloaded artifact).
+      # Gradle has no prior state on a fresh runner. zig + the mlterm
+      # link-time deps (freetype2, fontconfig, libpng, libssh2) must be
+      # present so those tasks succeed.
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.15.2
+
+      - name: Install mlterm-native system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config \
+            libfreetype6-dev libfontconfig1-dev \
+            libpng-dev libssh2-1-dev \
+            autoconf automake m4 gettext
 
       - name: Download librvvm (linux)
         uses: actions/download-artifact@v4
