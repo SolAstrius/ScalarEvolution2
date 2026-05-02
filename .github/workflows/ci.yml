@@ -157,10 +157,16 @@ jobs:
         # resolve when make invokes them. JAVA_HOME from GitHub env is
         # Windows-style; convert to MSYS-style for the header include
         # paths our Makefile constructs.
+        #
+        # CC/CXX explicitly use `zig.exe` because GNU make's direct-exec
+        # fast path calls execvp("zig", ...) without auto-appending `.exe`,
+        # so a bare `zig` resolves on Linux/macOS but fails on this runner.
         run: |
           export PATH="$(cygpath -u "$RUNNER_TOOL_CACHE")/zig/bin:$PATH"
           export JAVA_HOME_MSYS=$(cygpath -u "$JAVA_HOME")
           make -C native/openh264-jni -j$(nproc) \
+            CC="zig.exe cc" \
+            CXX="zig.exe c++" \
             JAVA_HOME="$JAVA_HOME_MSYS" \
             OPENH264_SRC="$(cygpath -u "$GITHUB_WORKSPACE")/vendor/openh264" \
             OUTPUT="$(cygpath -u "$GITHUB_WORKSPACE")/scev_h264.dll"
