@@ -48,7 +48,6 @@ build-output/
 
 # Agent / working notes
 AGENTS.md
-README.md
 docs/
 .claude/
 
