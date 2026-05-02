@@ -145,6 +145,11 @@ jobs:
         with:
           msystem: MINGW64
           install: make
+          # Inherit the Windows PATH so zig.exe (placed there by
+          # mlugg/setup-zig via core.addPath) resolves inside the MSYS2
+          # shell. Without this, the MSYS2 PATH is isolated and zig
+          # vanishes from view.
+          path-type: inherit
       - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
@@ -152,20 +157,15 @@ jobs:
           java-version: '21'
       - name: Build scev_h264.dll (windows-x86_64)
         shell: msys2 {0}
-        # mlugg/setup-zig adds zig to the GitHub-Actions-shell PATH via
-        # core.addPath, but the MSYS2 shell does not inherit that — it
-        # uses its own PATH. Locate zig.exe under RUNNER_TOOL_CACHE
-        # (versioned subdir like zig-windows-x86_64-0.15.2/) and pass an
-        # absolute path to make so its direct-exec recipe path works.
+        # JAVA_HOME from GitHub env is Windows-style; convert to
+        # MSYS-style so the include paths our Makefile constructs are
+        # POSIX-shaped. CC/CXX use zig.exe explicitly because GNU make's
+        # direct-exec fast path calls execvp without auto-appending .exe.
         run: |
-          ZIG_EXE=$(find "$(cygpath -u "$RUNNER_TOOL_CACHE")" -name 'zig.exe' -print -quit)
-          if [ -z "$ZIG_EXE" ]; then echo "zig.exe not found under RUNNER_TOOL_CACHE" >&2; exit 1; fi
-          echo "Using ZIG_EXE=$ZIG_EXE"
-          export PATH="$(dirname "$ZIG_EXE"):$PATH"
           export JAVA_HOME_MSYS=$(cygpath -u "$JAVA_HOME")
           make -C native/openh264-jni -j$(nproc) \
-            CC="$ZIG_EXE cc" \
-            CXX="$ZIG_EXE c++" \
+            CC="zig.exe cc" \
+            CXX="zig.exe c++" \
             JAVA_HOME="$JAVA_HOME_MSYS" \
             OPENH264_SRC="$(cygpath -u "$GITHUB_WORKSPACE")/vendor/openh264" \
             OUTPUT="$(cygpath -u "$GITHUB_WORKSPACE")/scev_h264.dll"
