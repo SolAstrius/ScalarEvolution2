@@ -15,35 +15,77 @@ The underlying VM is [RVVM], also by LekKit, used here through
 [pufit's fork](https://github.com/pufit/RVVM) which carries the JNI bridge
 and a handful of patches the mod depends on.
 
-> **Pre-alpha quality** — here be dragons.
+> **Alpha quality** — hic sunt dracones.
 
 ## Why the Fork?
 
 LekKit's *Scalar Evolution* targets Minecraft 1.7.10 and hadn't been
 brought forward. We didn't fork because of any disagreement — pufit
 started the port to bring it to a current Minecraft, and Sol joined for
-co-development. The mod's core ideas (in-world emulated computers, real
-guest Linux, customisable hardware, persistence) are LekKit's; everything
-since is a port + extensions on top of that.
+co-development.
+
+In practice "port" undersells it. The only code carried verbatim from
+upstream is the `lekkit.rvvm.*` JNI binding package (~30 files, ~280
+LOC) that talks to RVVM. The Minecraft side — blocks, block entities,
+menus, screens, network, recipes, datagen, rendering, peripheral bus,
+componentry, codecs, machine integration — is a from-scratch Kotlin
+reimplementation of roughly **31k LOC across 270+ files**. The mod's
+*conceptual* DNA (in-world emulated computers, real guest Linux,
+customisable hardware, persistence) is LekKit's; the actual shipping
+codebase is overwhelmingly new.
 
 ## What's in it today
 
+### Emulation core
 - **Real RISC-V Linux per computer.** Buildroot or Alpine boots inside
-  RVVM; persistent disks travel with NVMe items between cases.
+  RVVM; persistent disks travel with NVMe items between cases. Disk
+  images are GC'd when no longer referenced.
+- **CPU tier 1 / 2 / 4 hart progression** with branded part names; SoC
+  items expose tier as part of their type.
+- **RAM tier 5** at the top end of the memory ladder.
+- **Audio sync** — guest audio is anchored to a PTS wall-clock so
+  `aplay` doesn't drift against the framebuffer over long sessions.
+
+### Display & terminals
 - **VT100 / VT220 / VT340 / VT420 / VT520** terminal blocks driven by
-  mlterm-fb-embed. ReGIS and Sixel render correctly; period-correct
-  BootRom Setup pages (SET-UP A / B / CRT FX / MOD) on F3.
+  a JNI port of mlterm (mlterm-fb-embed). Full xterm-class fidelity:
+  ReGIS and Sixel both render. Period-correct BootRom Setup pages
+  (SET-UP A / B / CRT FX / MOD) on F3.
 - **CRT FX shader** with scanlines, phosphor bloom, chroma shift,
   vignette, and slight curvature on the in-world block face.
-- **Sound card** end-to-end: guest `aplay` reaches every nearby player's
-  OpenAL through Opus over the Minecraft network layer.
+- **Framebuffer streaming** as H.264 via a vendored OpenH264 build
+  (`libscev_h264`, cross-built with `zig cc`).
+
+### Audio
+- **Sound card** end-to-end: HDA → Opus → OpenAL. Guest `aplay`
+  reaches every nearby player through the Minecraft network layer with
+  per-listener spatialisation.
+
+### Peripherals & I/O
+- **Peripheral bus** with a typed component API; compat modules can
+  declare components against the upcoming `/sys/scev/` filesystem via
+  annotation + DSL.
+- **GPIO**, **I²C**, and an **MCU board** for tiny SoC + flash
+  workflows. Bare-metal blinky firmware (RISC-V assembly) ships as the
+  hello-world recipe.
 - **CC: Tweaked integration**, scev-as-computer: the guest Linux can
   enumerate, introspect, and call CC peripherals over `/dev/ttyS1` —
   including peripherals attached through wired modems.
-- **MCU boards** for tiny SoC + flash workflows; bare-metal blinky
-  firmware ships as the hello-world.
-- **Processing-machine chain** for in-game paper/ink/ribbon production
+
+### In-world progression
+- **Processing-machine chain** for paper / ink / ribbon production
   feeding a teletype that prints the kernel console as it boots.
+- **Sectioned creative tab** with computing / motherboards / storage /
+  expansion / cases & peripherals / crafting buckets.
+
+### Client & integration
+- **owo-ui screens** for the computer case, motherboard, and other
+  configurators.
+- **Jade HUD providers** for at-a-glance machine state without opening
+  the GUI.
+- **Zig guest agent** (`tools/scev-guest-zig/`) — a small RISC-V Linux
+  userland that speaks RPC over a serial port for host↔guest
+  introspection and orchestration.
 
 ## Building
 
