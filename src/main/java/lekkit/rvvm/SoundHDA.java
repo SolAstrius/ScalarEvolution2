@@ -6,8 +6,6 @@
 
 package lekkit.rvvm;
 
-import org.jetbrains.annotations.Nullable;
-
 /**
  * Intel HD Audio (HDA) PCI controller, emulating a C-Media CM8888 codec.
  *
@@ -16,11 +14,9 @@ import org.jetbrains.annotations.Nullable;
  * <ul>
  *   <li>{@link #SoundHDA(RVVMMachine, boolean)} with {@code useRing=true} —
  *       PCM lands in a native ring buffer; the caller polls it via
- *       {@link #poll(byte[])}. Used by the Minecraft mod: the server-tick
- *       thread drains the ring on each tick, downsamples, and broadcasts
- *       packets. Avoids the JVM-thread-attach failure that hits us when
- *       we try to call into Java directly from RVVM's stream-worker
- *       pthread.</li>
+ *       {@link #poll(byte[])}. Avoids the JVM-thread-attach failure that
+ *       hits when RVVM's stream-worker pthread tries to call into Java
+ *       directly.</li>
  *   <li>{@link #SoundHDA(RVVMMachine)} or {@code useRing=false} — the
  *       compile-time backend handles PCM (ALSA on Linux builds, silent
  *       otherwise). Retained for standalone / non-JVM usage.</li>
