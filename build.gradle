@@ -584,6 +584,22 @@ tasks.register('buildRvvmNative') {
 // Java-only changes.
 processResources.dependsOn 'buildRvvmNative'
 
+// Pull the lekkit.rvvm.* JNI wrapper sources straight from the upstream
+// RVVM checkout in build/rvvm-src instead of vendoring a duplicate copy
+// under src/main/java/lekkit/rvvm/. The clone is already a build input
+// (fetchRvvmSrc above), pinned to ${rvvmRef}, so the wrappers stay in
+// lockstep with the librvvm.so they bind against — no risk of the Java
+// side declaring a native that the .so doesn't export, or vice versa.
+//
+// compileJava AND compileKotlin both need the sources present — Kotlin
+// runs first in this project's task graph and resolves Java symbols
+// from the same srcDir to populate its classpath, so wiring only Java
+// would leave Kotlin to fail with "Unresolved reference RVVMNative" on
+// a fresh checkout.
+sourceSets.main.java.srcDirs += file("${rvvmSrcDir}/src/bindings/jni")
+tasks.named('compileJava').configure   { dependsOn 'fetchRvvmSrc' }
+tasks.named('compileKotlin').configure { dependsOn 'fetchRvvmSrc' }
+
 // --------------------------------------------------------------------
 // OpenH264 JNI wrapper native — vendored + built via zig
 // --------------------------------------------------------------------
