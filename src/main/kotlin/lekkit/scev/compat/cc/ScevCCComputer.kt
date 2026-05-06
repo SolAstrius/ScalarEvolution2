@@ -529,16 +529,25 @@ class ScevCCComputer(private val machineUuid: UUID) : IComputerAccess {
         }
 
         /**
-         * Minimal Java-object → MsgValue coercion for queueEvent args.
-         * Keeps responsibilities separate from [LuaValueConverter.toMsg]
-         * — this path doesn't reach into generic collections the way
-         * peripheral return values do.
+         * Java-object → MsgValue coercion for `queueEvent` payloads
+         * flowing CC → guest. Mirrors [LuaValueConverter.toMsg] (the
+         * return-value path) so the two directions agree on type
+         * mapping; the only intentional divergence is that this path is
+         * called from `queueEvent`'s vararg `Any?` and never sees
+         * [dan200.computercraft.api.lua.MethodResult] etc.
+         *
+         * Arbitrary-precision numbers stringify to preserve precision
+         * (Lua's number is a double; BigInteger EMC values from
+         * ProjectE-style mods can exceed 2^53).
          */
         private fun javaObjectToMsg(o: Any?): MsgValue = when (o) {
             null -> MsgValue.NIL
             is Boolean -> MsgValue.of(o)
             is Byte, is Short, is Int, is Long -> MsgValue.of((o as Number).toLong())
+            is java.math.BigInteger, is java.math.BigDecimal,
+            is java.util.concurrent.atomic.AtomicLong -> MsgValue.of(o.toString())
             is Float, is Double -> MsgValue.of((o as Number).toDouble())
+            is Number -> MsgValue.of(o.toDouble())
             is String -> MsgValue.of(o)
             is ByteArray -> MsgValue.of(o)
             is Array<*> -> MsgValue.ofArray(o.map { javaObjectToMsg(it) })

@@ -134,6 +134,26 @@ object ScevPeripheralMethods {
     }
 
     /**
+     * Class-based signature scan, for objects that aren't themselves
+     * [IPeripheral] but contribute methods to one — e.g. Tweakium's
+     * `IPeripheralPlugin` plugins, which CC's own `getSelfMethods`
+     * scans by reflecting their concrete class for `@LuaFunction`. The
+     * dispatch path stays untouched (those methods reach us via
+     * [IDynamicPeripheral.callMethod]); this is purely for `describe`
+     * to surface accurate signatures.
+     *
+     * Cached the same way [forPeripheral] is, so repeat introspection
+     * across many peripherals sharing a plugin class is cheap.
+     */
+    @JvmStatic
+    fun signaturesForClass(cls: Class<*>): Map<String, MethodSignature> {
+        val table = tableCache.computeIfAbsent(cls) { buildStatic(it) }
+        val sorted = TreeMap<String, MethodSignature>()
+        sorted.putAll(table.signatures)
+        return sorted
+    }
+
+    /**
      * Invoke `name` on `peripheral` with the callback loop folded in.
      *
      * The method's first call may return a [MethodResult] whose
@@ -254,6 +274,14 @@ object ScevPeripheralMethods {
         val unsafe: Boolean,
         /** simpleName of the class that physically declared the method. */
         val declaredBy: String,
+        /**
+         * True when the method takes a raw [IArguments] passthrough.
+         * Reflection can't see the real positional shape — the method
+         * pulls args itself with `optString(0)`, `getInt(1)`, etc. The
+         * `params` list in this signature is necessarily incomplete;
+         * guest tooling should treat the call as varargs/dynamic.
+         */
+        val acceptsRawArgs: Boolean = false,
     ) {
         /**
          * Human-readable one-liner: `name(p0: type, p1: type?) -> shape [main]`.
@@ -278,8 +306,10 @@ object ScevPeripheralMethods {
             val flags = buildList {
                 if (mainThread) add("mainThread")
                 if (unsafe) add("unsafe")
+                if (acceptsRawArgs) add("varargs")
             }.joinToString(",").let { if (it.isEmpty()) "" else " [$it]" }
-            return "$name($ps) -> $ret$flags"
+            val psOut = if (acceptsRawArgs && ps.isEmpty()) "..." else if (acceptsRawArgs) "$ps, ..." else ps
+            return "$name($psOut) -> $ret$flags"
         }
     }
 
@@ -372,6 +402,7 @@ object ScevPeripheralMethods {
             mainThread = ann.mainThread,
             unsafe = ann.unsafe,
             declaredBy = method.declaringClass.simpleName,
+            acceptsRawArgs = paramTypes.any { it == IArguments::class.java },
         )
         val invoker = Invoker { target, computer, context, args ->
             // Convert args in a separate try so argument-coercion

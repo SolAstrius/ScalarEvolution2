@@ -310,11 +310,13 @@ internal object ScevCCHandlers {
      *   class: <fqn>,
      *   groups: {
      *     <declaringClass>: [{ name, aliases, params: [{luaType, optional, enumValues?}], return, mainThread, unsafe, signature }, ...]
-     *   }
+     *   },
+     *   dynamicMethods?: [<name>, ...]   // IDynamicPeripheral fillers (Tweakium plugin methods)
      * }
      * ```
      * Single-method form drops `groups` in favour of a flat method map
-     * keyed `method`.
+     * keyed `method` — `{name, dynamic: true}` if the method is known
+     * by name only (no static `@LuaFunction` signature available).
      *
      * Remote peripherals (wired-modem) can't introspect — we don't
      * have the far-side class. Return a structured `{dynamic: true}`
@@ -337,6 +339,20 @@ internal object ScevCCHandlers {
         args: List<MsgValue>,
     ): MsgValue {
         val sigs = ScevPeripheralMethods.signaturesFor(peripheral)
+        // Tweakium plugin / boon signatures rescued via reflection:
+        // their @LuaFunction methods live on the plugin's concrete
+        // class, but the plugin instance is held in a private field on
+        // OwnedPeripheral. Reach in, run our standard scanner against
+        // each plugin's class, merge results. Methods are still
+        // dispatched via IDynamicPeripheral.callMethod — we just
+        // surface the shapes.
+        val pluginSigs: Map<String, ScevPeripheralMethods.MethodSignature> =
+            tweakiumPluginSignatures(peripheral)
+        // Names exposed via IDynamicPeripheral that aren't backed by an
+        // @LuaFunction we can introspect — neither directly nor via the
+        // Tweakium reflection rescue.
+        val allNames = ScevPeripheralMethods.methodNames(peripheral)
+        val dynamicOnly = allNames.filter { it !in sigs && it !in pluginSigs }.sorted()
         val methodFilter = if (args.size > 1 && args[1].isString) args[1].asString() else null
 
         val base = linkedMapOf<MsgValue, MsgValue>()
@@ -348,15 +364,37 @@ internal object ScevCCHandlers {
         base[MsgValue.of("class")] = MsgValue.of(peripheral::class.java.name)
 
         if (methodFilter != null) {
-            val sig = sigs[methodFilter]
-                ?: throw RpcHandler.RpcException("no such method on $name: $methodFilter")
-            base[MsgValue.of("method")] = signatureMsg(sig)
-            return MsgValue.ofMap(base)
+            sigs[methodFilter]?.let {
+                base[MsgValue.of("method")] = signatureMsg(it)
+                return MsgValue.ofMap(base)
+            }
+            pluginSigs[methodFilter]?.let {
+                base[MsgValue.of("method")] = signatureMsg(it)
+                return MsgValue.ofMap(base)
+            }
+            if (methodFilter in dynamicOnly) {
+                // Known to exist but no static signature — emit a
+                // dynamic stub so the guest can still discover it.
+                val stub = linkedMapOf<MsgValue, MsgValue>(
+                    MsgValue.of("name") to MsgValue.of(methodFilter),
+                    MsgValue.of("dynamic") to MsgValue.of(true),
+                )
+                base[MsgValue.of("method")] = MsgValue.ofMap(stub)
+                return MsgValue.ofMap(base)
+            }
+            throw RpcHandler.RpcException("no such method on $name: $methodFilter")
         }
 
         // Group by declaredBy — TreeMap for stable output, inner list sorted by name.
         val groups = java.util.TreeMap<String, MutableList<ScevPeripheralMethods.MethodSignature>>()
         for ((_, sig) in sigs) {
+            groups.computeIfAbsent(sig.declaredBy) { mutableListOf() }.add(sig)
+        }
+        for ((_, sig) in pluginSigs) {
+            // Plugin-rescued sigs already carry the plugin class name as
+            // declaredBy (via signaturesForClass) — they slot naturally
+            // into the same grouping shape, distinct from the parent
+            // peripheral's own groups.
             groups.computeIfAbsent(sig.declaredBy) { mutableListOf() }.add(sig)
         }
         val groupsMsg = linkedMapOf<MsgValue, MsgValue>()
@@ -365,6 +403,13 @@ internal object ScevCCHandlers {
             groupsMsg[MsgValue.of(declaringClass)] = MsgValue.ofArray(methods.map { signatureMsg(it) })
         }
         base[MsgValue.of("groups")] = MsgValue.ofMap(groupsMsg)
+        // Surface dynamic-only methods (Tweakium plugin methods,
+        // IDynamicPeripheral fillers) so the guest doesn't think they
+        // don't exist. Names only — call shape is opaque, the guest
+        // can probe with bad args to surface the typed error.
+        if (dynamicOnly.isNotEmpty()) {
+            base[MsgValue.of("dynamicMethods")] = MsgValue.ofArray(dynamicOnly.map { MsgValue.of(it) })
+        }
         return MsgValue.ofMap(base)
     }
 
@@ -480,6 +525,128 @@ internal object ScevCCHandlers {
             }
         }.orElse(null)
 
+    /**
+     * Best-effort signature rescue for Tweakium-style peripherals (UPW,
+     * Turtlematic, Cloud Solutions, Digital Items, …). These all extend
+     * `OwnedPeripheral` and route their @LuaFunction methods through
+     * `IDynamicPeripheral`, with the real implementation living on
+     * separate plugin / boon objects held in private fields.
+     *
+     * What we do:
+     *  1. Reflect into a `plugins` field on the peripheral's class
+     *     hierarchy. Walk every `IPeripheralPlugin` it contains.
+     *  2. Walk `peripheralOwner.abilities` (public Collection) — boons
+     *     also implement `IPeripheralPlugin` and contribute methods via
+     *     the same `getMethods(server)` path.
+     *  3. For each plugin/boon instance, run our standard class-based
+     *     scanner. Method names match what `IDynamicPeripheral`
+     *     dispatches by, because Tweakium binds them with the same
+     *     name CC's `getSelfMethods` would produce.
+     *
+     * Any reflection failure is swallowed — we degrade to the existing
+     * "dynamicMethods" name-only fallback.
+     *
+     * Cached field lookup the same way the wired-modem peripheral
+     * unwrap is cached.
+     */
+    private fun tweakiumPluginSignatures(
+        peripheral: IPeripheral,
+    ): Map<String, ScevPeripheralMethods.MethodSignature> {
+        val out = linkedMapOf<String, ScevPeripheralMethods.MethodSignature>()
+        try {
+            val pluginsField = pluginsFieldFor(peripheral.javaClass) ?: return collectBoonSignatures(peripheral, out)
+            val plugins = pluginsField.get(peripheral) as? Collection<*> ?: return collectBoonSignatures(peripheral, out)
+            for (plugin in plugins) {
+                if (plugin == null) continue
+                mergeSignatures(plugin.javaClass, out)
+            }
+        } catch (_: Throwable) {
+            // fall through to boons-only
+        }
+        return collectBoonSignatures(peripheral, out)
+    }
+
+    private fun collectBoonSignatures(
+        peripheral: IPeripheral,
+        out: MutableMap<String, ScevPeripheralMethods.MethodSignature>,
+    ): Map<String, ScevPeripheralMethods.MethodSignature> {
+        try {
+            // OwnedPeripheral.peripheralOwner.abilities is a public
+            // Collection<IPeripheralOwnerBoon>. Boons also implement
+            // IPeripheralPlugin, contributing methods the same way.
+            val ownerField = peripheralOwnerFieldFor(peripheral.javaClass) ?: return out
+            val owner = ownerField.get(peripheral) ?: return out
+            val abilitiesGetter = abilitiesGetterFor(owner.javaClass) ?: return out
+            val abilities = abilitiesGetter.invoke(owner) as? Collection<*> ?: return out
+            for (a in abilities) {
+                if (a == null) continue
+                mergeSignatures(a.javaClass, out)
+            }
+        } catch (_: Throwable) {}
+        return out
+    }
+
+    private fun mergeSignatures(
+        cls: Class<*>,
+        out: MutableMap<String, ScevPeripheralMethods.MethodSignature>,
+    ) {
+        for ((name, sig) in ScevPeripheralMethods.signaturesForClass(cls)) {
+            // First-wins, matching how Tweakium itself collides plugin
+            // methods (collectPluginMethods iterates plugins then boons
+            // and just appends — duplicates are theoretically possible
+            // but unusual; we keep the first to stay deterministic).
+            out.putIfAbsent(name, sig)
+        }
+    }
+
+    private val pluginsFieldCache =
+        java.util.concurrent.ConcurrentHashMap<Class<*>, java.util.Optional<Field>>()
+
+    private fun pluginsFieldFor(cls: Class<*>): Field? =
+        pluginsFieldCache.computeIfAbsent(cls) { c ->
+            var k: Class<*>? = c
+            while (k != null) {
+                try {
+                    val f = k.getDeclaredField("plugins")
+                    f.isAccessible = true
+                    return@computeIfAbsent java.util.Optional.of(f)
+                } catch (_: NoSuchFieldException) {}
+                k = k.superclass
+            }
+            java.util.Optional.empty()
+        }.orElse(null)
+
+    private val peripheralOwnerFieldCache =
+        java.util.concurrent.ConcurrentHashMap<Class<*>, java.util.Optional<Field>>()
+
+    private fun peripheralOwnerFieldFor(cls: Class<*>): Field? =
+        peripheralOwnerFieldCache.computeIfAbsent(cls) { c ->
+            var k: Class<*>? = c
+            while (k != null) {
+                try {
+                    val f = k.getDeclaredField("peripheralOwner")
+                    f.isAccessible = true
+                    return@computeIfAbsent java.util.Optional.of(f)
+                } catch (_: NoSuchFieldException) {}
+                k = k.superclass
+            }
+            java.util.Optional.empty()
+        }.orElse(null)
+
+    private val abilitiesGetterCache =
+        java.util.concurrent.ConcurrentHashMap<Class<*>, java.util.Optional<java.lang.reflect.Method>>()
+
+    private fun abilitiesGetterFor(cls: Class<*>): java.lang.reflect.Method? =
+        abilitiesGetterCache.computeIfAbsent(cls) { c ->
+            try {
+                val m = c.getMethod("getAbilities")
+                m.isAccessible = true
+                java.util.Optional.of(m)
+            } catch (_: NoSuchMethodException) {
+                java.util.Optional.empty()
+            }
+        }.orElse(null)
+
     private fun signatureMsg(sig: ScevPeripheralMethods.MethodSignature): MsgValue {
         val m = linkedMapOf<MsgValue, MsgValue>()
         m[MsgValue.of("name")] = MsgValue.of(sig.name)
@@ -497,6 +664,9 @@ internal object ScevCCHandlers {
         m[MsgValue.of("return")] = MsgValue.of(sig.returnShape.name.lowercase())
         m[MsgValue.of("mainThread")] = MsgValue.of(sig.mainThread)
         m[MsgValue.of("unsafe")] = MsgValue.of(sig.unsafe)
+        // Method takes a raw IArguments — `params` is incomplete; the
+        // method indexes into args itself. Guests should treat as varargs.
+        if (sig.acceptsRawArgs) m[MsgValue.of("varargs")] = MsgValue.of(true)
         m[MsgValue.of("declaredBy")] = MsgValue.of(sig.declaredBy)
         m[MsgValue.of("signature")] = MsgValue.of(sig.signatureString())
         return MsgValue.ofMap(m)

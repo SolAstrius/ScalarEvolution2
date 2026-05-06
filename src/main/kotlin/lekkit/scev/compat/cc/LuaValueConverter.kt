@@ -74,6 +74,11 @@ internal object LuaValueConverter {
         null -> MsgValue.NIL
         is Boolean -> MsgValue.of(o)
         is Byte, is Short, is Int, is Long -> MsgValue.of((o as Number).toLong())
+        // Arbitrary-precision numbers don't fit Lua's double — encode as
+        // a string so callers don't silently lose precision (ProjectE EMC
+        // is BigInteger and routinely exceeds 2^53).
+        is java.math.BigInteger, is java.math.BigDecimal,
+        is java.util.concurrent.atomic.AtomicLong -> MsgValue.of(o.toString())
         is Number -> MsgValue.of(o.toDouble())
         is String -> MsgValue.of(o)
         is ByteArray -> MsgValue.of(o)
