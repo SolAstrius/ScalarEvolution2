@@ -1,6 +1,0 @@
-{
-  "type": "scev:drying",
-  "ingredient": { "item": "scev:wet_paper_sheet" },
-  "result": { "id": "scev:paper_sheet", "count": 1 },
-  "time": 200
-}

@@ -25,8 +25,8 @@ import net.minecraft.world.level.block.state.BlockState
 import net.minecraft.world.phys.BlockHitResult
 
 /**
- * Generic base for every processing-machine block (Pulper, SheetFormer,
- * Dryer, Winder, InkMixer, RibbonImpregnator). Concrete subclasses pick
+ * Generic base for every processing-machine block (InkMixer,
+ * RibbonImpregnator). Concrete subclasses pick
  * the BE class + menu factory + container lang key; everything else —
  * the cube model, the right-click menu open, the break-block drop, the
  * tick wiring — is identical.

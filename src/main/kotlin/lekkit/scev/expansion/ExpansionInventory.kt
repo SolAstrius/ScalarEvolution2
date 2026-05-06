@@ -16,9 +16,7 @@ import net.minecraft.world.item.ItemStack
 /**
  * Fixed-size slot bank holding [IExpansionCard]-implementing items.
  * Owned by every [lekkit.scev.blockentity.ProcessingMachineBlockEntity];
- * size is set at construction time by the concrete BE class
- * (a small machine like the Pulper might have 1-2 slots, a beefier one
- * 4+).
+ * size is set at construction time by the concrete BE class.
  *
  * Cards are stack-of-1 — they're physical hardware, not stackable
  * supplies. mayPlace gates against [IExpansionCard], so any item the

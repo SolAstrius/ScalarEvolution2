@@ -39,10 +39,6 @@ object ProcessingMachineCapabilities {
 
     private fun onRegisterCapabilities(event: RegisterCapabilitiesEvent) {
         val beTypes = listOf(
-            ScevRegistry.PULPER_BE,
-            ScevRegistry.SHEET_FORMER_BE,
-            ScevRegistry.DRYER_BE,
-            ScevRegistry.WINDER_BE,
             ScevRegistry.INK_MIXER_BE,
             ScevRegistry.RIBBON_IMPREGNATOR_BE,
         )
@@ -52,14 +48,6 @@ object ProcessingMachineCapabilities {
                 typeHolder.get(),
             ) { be, side -> ProcessingMachineItemHandler(be, side) }
         }
-
-        // Fluid handler: only the Pulper has a tank today. Adding a
-        // fluid surface to other machines (Dryer steam, Ink Mixer
-        // solvent) would just append entries here.
-        event.registerBlockEntity(
-            net.neoforged.neoforge.capabilities.Capabilities.FluidHandler.BLOCK,
-            ScevRegistry.PULPER_BE.get(),
-        ) { be, _ -> be.waterTank }
     }
 }
 

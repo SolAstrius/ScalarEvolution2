@@ -27,10 +27,10 @@ import net.minecraft.world.level.Level
  * recipe accepts an *ordered* list of [Ingredient]s; the matching
  * machine BE pairs them positionally with its input slots.
  *
- * Single-input machines (Pulper, SheetFormer, Dryer, Winder,
- * RibbonImpregnator) ship recipes with `ingredients` of length 1.
- * Multi-input machines like [lekkit.scev.blockentity.InkMixerBlockEntity]
- * (pigment + binder) ship recipes with length ≥ 2.
+ * Single-input machines (RibbonImpregnator) ship recipes with
+ * `ingredients` of length 1. Multi-input machines like
+ * [lekkit.scev.blockentity.InkMixerBlockEntity] (pigment + binder)
+ * ship recipes with length ≥ 2.
  *
  * JSON shape:
  * ```json

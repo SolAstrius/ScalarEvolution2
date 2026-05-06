@@ -32,7 +32,7 @@ import net.minecraft.world.item.crafting.RecipeHolder
  *      exclusion rect that covers the whole screen so JEI has no
  *      sidebar room.
  *   2. Surface every [MachineRecipe] via per-RecipeType categories
- *      so players can browse the paper / ink / ribbon chain.
+ *      so players can browse the ink / ribbon chain.
  *
  * Loaded only when JEI is installed (@JeiPlugin instances are
  * instantiated by JEI itself; missing-JEI builds skip this class).
@@ -44,18 +44,6 @@ class ScevJeiPlugin : IModPlugin {
     override fun registerCategories(registration: IRecipeCategoryRegistration) {
         val helper = registration.jeiHelpers.guiHelper
         registration.addRecipeCategories(
-            ProcessingRecipeCategory(JEI_PULPING,
-                Component.translatable("jei.scev.category.pulping"),
-                ItemStack(ScevRegistry.PULPER.get()), helper),
-            ProcessingRecipeCategory(JEI_SHEET_FORMING,
-                Component.translatable("jei.scev.category.sheet_forming"),
-                ItemStack(ScevRegistry.SHEET_FORMER.get()), helper),
-            ProcessingRecipeCategory(JEI_DRYING,
-                Component.translatable("jei.scev.category.drying"),
-                ItemStack(ScevRegistry.DRYER.get()), helper),
-            ProcessingRecipeCategory(JEI_WINDING,
-                Component.translatable("jei.scev.category.winding"),
-                ItemStack(ScevRegistry.WINDER.get()), helper),
             ProcessingRecipeCategory(JEI_INK_MIXING,
                 Component.translatable("jei.scev.category.ink_mixing"),
                 ItemStack(ScevRegistry.INK_MIXER.get()), helper),
@@ -67,10 +55,6 @@ class ScevJeiPlugin : IModPlugin {
 
     override fun registerRecipes(registration: IRecipeRegistration) {
         val rm = Minecraft.getInstance().level?.recipeManager ?: return
-        addRecipes(registration, rm, MachineRecipes.PULPING_TYPE.get(),       JEI_PULPING)
-        addRecipes(registration, rm, MachineRecipes.SHEET_FORMING_TYPE.get(), JEI_SHEET_FORMING)
-        addRecipes(registration, rm, MachineRecipes.DRYING_TYPE.get(),        JEI_DRYING)
-        addRecipes(registration, rm, MachineRecipes.WINDING_TYPE.get(),       JEI_WINDING)
         addRecipes(registration, rm, MachineRecipes.INK_MIXING_TYPE.get(),    JEI_INK_MIXING)
         addRecipes(registration, rm, MachineRecipes.RIBBONING_TYPE.get(),     JEI_RIBBONING)
     }
@@ -85,10 +69,6 @@ class ScevJeiPlugin : IModPlugin {
     }
 
     override fun registerRecipeCatalysts(registration: IRecipeCatalystRegistration) {
-        registration.addRecipeCatalyst(ItemStack(ScevRegistry.PULPER.get()),             JEI_PULPING)
-        registration.addRecipeCatalyst(ItemStack(ScevRegistry.SHEET_FORMER.get()),       JEI_SHEET_FORMING)
-        registration.addRecipeCatalyst(ItemStack(ScevRegistry.DRYER.get()),              JEI_DRYING)
-        registration.addRecipeCatalyst(ItemStack(ScevRegistry.WINDER.get()),             JEI_WINDING)
         registration.addRecipeCatalyst(ItemStack(ScevRegistry.INK_MIXER.get()),          JEI_INK_MIXING)
         registration.addRecipeCatalyst(ItemStack(ScevRegistry.RIBBON_IMPREGNATOR.get()), JEI_RIBBONING)
     }
@@ -103,10 +83,6 @@ class ScevJeiPlugin : IModPlugin {
     }
 
     companion object {
-        @JvmField val JEI_PULPING:       RecipeType<RecipeHolder<MachineRecipe>> = jeiType("pulping")
-        @JvmField val JEI_SHEET_FORMING: RecipeType<RecipeHolder<MachineRecipe>> = jeiType("sheet_forming")
-        @JvmField val JEI_DRYING:        RecipeType<RecipeHolder<MachineRecipe>> = jeiType("drying")
-        @JvmField val JEI_WINDING:       RecipeType<RecipeHolder<MachineRecipe>> = jeiType("winding")
         @JvmField val JEI_INK_MIXING:    RecipeType<RecipeHolder<MachineRecipe>> = jeiType("ink_mixing")
         @JvmField val JEI_RIBBONING:     RecipeType<RecipeHolder<MachineRecipe>> = jeiType("ribboning")
 

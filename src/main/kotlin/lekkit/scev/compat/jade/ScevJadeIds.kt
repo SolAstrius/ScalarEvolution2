@@ -19,7 +19,7 @@ internal object ScevJadeIds {
     val CRT_MONITOR: ResourceLocation = id("crt_monitor")
     val KEYBOARD: ResourceLocation = id("keyboard")
     val FLASH_PROGRAMMER: ResourceLocation = id("flash_programmer")
-    val PULPER: ResourceLocation = id("pulper")
+    val PROCESSING_MACHINE: ResourceLocation = id("processing_machine")
 
     private fun id(path: String): ResourceLocation =
         ResourceLocation.fromNamespaceAndPath(ScalarEvolution.MODID, path)

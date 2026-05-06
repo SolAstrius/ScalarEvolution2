@@ -10,22 +10,14 @@ import lekkit.scev.blockentity.ComputerCaseBlockEntity
 import lekkit.scev.blockentity.FlashProgrammerBlockEntity
 import lekkit.scev.blockentity.KeyboardBlockEntity
 import lekkit.scev.blockentity.McuBoardBlockEntity
-import lekkit.scev.blockentity.DryerBlockEntity
 import lekkit.scev.blockentity.InkMixerBlockEntity
-import lekkit.scev.blockentity.PulperBlockEntity
 import lekkit.scev.blockentity.RibbonImpregnatorBlockEntity
-import lekkit.scev.blockentity.SheetFormerBlockEntity
-import lekkit.scev.blockentity.WinderBlockEntity
 import lekkit.scev.blocks.DirectionalBlock
 import lekkit.scev.blocks.FlashProgrammerBlock
 import lekkit.scev.blocks.KeyboardBlock
 import lekkit.scev.blocks.McuBoardBlock
-import lekkit.scev.blocks.DryerBlock
 import lekkit.scev.blocks.InkMixerBlock
-import lekkit.scev.blocks.PulperBlock
 import lekkit.scev.blocks.RibbonImpregnatorBlock
-import lekkit.scev.blocks.SheetFormerBlock
-import lekkit.scev.blocks.WinderBlock
 import snownee.jade.api.IWailaClientRegistration
 import snownee.jade.api.IWailaCommonRegistration
 import snownee.jade.api.IWailaPlugin
@@ -62,12 +54,8 @@ class ScevJadePlugin : IWailaPlugin {
         // Same provider serves every ProcessingMachineBlockEntity
         // subclass — it inspects fields on the base class so each
         // concrete machine gets identical tooltip behavior.
-        r.registerBlockDataProvider(PulperProvider.INSTANCE, PulperBlockEntity::class.java)
-        r.registerBlockDataProvider(PulperProvider.INSTANCE, SheetFormerBlockEntity::class.java)
-        r.registerBlockDataProvider(PulperProvider.INSTANCE, DryerBlockEntity::class.java)
-        r.registerBlockDataProvider(PulperProvider.INSTANCE, WinderBlockEntity::class.java)
-        r.registerBlockDataProvider(PulperProvider.INSTANCE, InkMixerBlockEntity::class.java)
-        r.registerBlockDataProvider(PulperProvider.INSTANCE, RibbonImpregnatorBlockEntity::class.java)
+        r.registerBlockDataProvider(ProcessingMachineProvider.INSTANCE, InkMixerBlockEntity::class.java)
+        r.registerBlockDataProvider(ProcessingMachineProvider.INSTANCE, RibbonImpregnatorBlockEntity::class.java)
     }
 
     override fun registerClient(r: IWailaClientRegistration) {
@@ -81,11 +69,7 @@ class ScevJadePlugin : IWailaPlugin {
         r.registerBlockComponent(CrtMonitorProvider.INSTANCE,      DirectionalBlock::class.java)
         r.registerBlockComponent(KeyboardProvider.INSTANCE,        KeyboardBlock::class.java)
         r.registerBlockComponent(FlashProgrammerProvider.INSTANCE, FlashProgrammerBlock::class.java)
-        r.registerBlockComponent(PulperProvider.INSTANCE, PulperBlock::class.java)
-        r.registerBlockComponent(PulperProvider.INSTANCE, SheetFormerBlock::class.java)
-        r.registerBlockComponent(PulperProvider.INSTANCE, DryerBlock::class.java)
-        r.registerBlockComponent(PulperProvider.INSTANCE, WinderBlock::class.java)
-        r.registerBlockComponent(PulperProvider.INSTANCE, InkMixerBlock::class.java)
-        r.registerBlockComponent(PulperProvider.INSTANCE, RibbonImpregnatorBlock::class.java)
+        r.registerBlockComponent(ProcessingMachineProvider.INSTANCE, InkMixerBlock::class.java)
+        r.registerBlockComponent(ProcessingMachineProvider.INSTANCE, RibbonImpregnatorBlock::class.java)
     }
 }

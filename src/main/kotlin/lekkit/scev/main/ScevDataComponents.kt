@@ -151,24 +151,7 @@ object ScevDataComponents {
              .networkSynchronized(ResourceLocation.STREAM_CODEC)
         }
 
-    /* ---------------- Papercraft realism components ---------------- */
-
-    /**
-     * Moisture percentage 0..100 for a wet paper sheet. The Dryer's
-     * recipe produces a dry sheet (separate item) but in transit the
-     * sheet's moisture decays; UI shows it as a damage bar so players
-     * see the drying happen visually.
-     *
-     * Default 100 (just-formed, fully wet) when missing. Drying
-     * machine drops it by [DRYING_RATE_PER_TICK] per tick until 0,
-     * then converts to [lekkit.scev.main.ScevRegistry.PAPER_SHEET].
-     */
-    @JvmField
-    val MOISTURE: DeferredHolder<DataComponentType<*>, DataComponentType<Int>> =
-        DATA_COMPONENTS.registerComponentType("moisture") { b ->
-            b.persistent(Codec.INT)
-             .networkSynchronized(ByteBufCodecs.VAR_INT.cast())
-        }
+    /* ---------------- Teletype consumable counters ---------------- */
 
     /**
      * Lines remaining on a paper roll (loaded into a teletype). Starts
@@ -195,8 +178,6 @@ object ScevDataComponents {
              .networkSynchronized(ByteBufCodecs.VAR_INT.cast())
         }
 
-    /** Tick budget for one moisture point of drying. */
-    const val DRYING_RATE_PER_TICK: Int = 1
     /** Lines a fresh roll prints before exhaustion. */
     const val PAPER_ROLL_INITIAL_LINES: Int = 500
     /** Characters per fresh ribbon. */

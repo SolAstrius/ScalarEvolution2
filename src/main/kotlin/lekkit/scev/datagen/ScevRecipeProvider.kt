@@ -445,50 +445,15 @@ class ScevRecipeProvider(
         }
 
         // ------------------------------------------------------------------
-        // Paper / ink / ribbon production chain — crafting recipes
+        // Ink / ribbon production chain — crafting recipes
         // ------------------------------------------------------------------
 
-        // Pulper machine: iron + cauldron + electronic-parts core.
-        shaped(PULPER, category = DECORATIONS) {
-            rows("FIF", "ICI", "FPF")
-            'F' to FIBERGLASS
-            'I' to Items.IRON_INGOT
-            'C' to Items.CAULDRON
-            'P' to PCB_BASE
-            unlockBy(Items.CAULDRON)
-        }
-
-        // Sheet former: pulper + iron mesh (iron bars stand-in) — the
-        // wet-end of the Fourdrinier line where slurry drains through
-        // a screen.
-        shaped(SHEET_FORMER, category = DECORATIONS) {
-            rows("FIF", "BPB", "FIF")
-            'F' to FIBERGLASS
-            'I' to Items.IRON_INGOT
-            'B' to Items.IRON_BARS
-            'P' to PCB_BASE
-            unlockBy(PULPER)
-        }
-
-        // Dryer: heated drum (the Yankee dryer of paper-mill lore).
-        // Furnace as the heat-source recipe component reads naturally.
-        shaped(DRYER, category = DECORATIONS) {
-            rows("FIF", "IUI", "FPF")
-            'F' to FIBERGLASS
-            'I' to Items.IRON_INGOT
-            'U' to Items.FURNACE
-            'P' to PCB_BASE
-            unlockBy(Items.FURNACE)
-        }
-
-        // Winder: pistons (winding axle) + iron + electronics.
-        shaped(WINDER, category = DECORATIONS) {
-            rows("FIF", "IPI", "FCF")
-            'F' to FIBERGLASS
-            'I' to Items.IRON_INGOT
-            'P' to Items.PISTON
-            'C' to PCB_BASE
-            unlockBy(Items.PISTON)
+        // Paper roll for the teletype: shapeless from vanilla paper. A
+        // single sheet wound onto a spool; trades stack-size for the
+        // damage-bar lines counter that the teletype decrements.
+        shapeless(PAPER_ROLL, category = MISC) {
+            ingredient(Items.PAPER)
+            unlockBy(Items.PAPER)
         }
 
         // Ink mixer: glass bottle + cauldron + electronic parts.

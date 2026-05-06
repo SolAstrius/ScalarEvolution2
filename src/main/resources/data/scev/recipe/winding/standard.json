@@ -1,6 +1,0 @@
-{
-  "type": "scev:winding",
-  "ingredient": { "item": "scev:paper_sheet" },
-  "result": { "id": "scev:paper_roll", "count": 1 },
-  "time": 60
-}

@@ -6,7 +6,6 @@
 package lekkit.scev.compat.jade
 
 import lekkit.scev.blockentity.ProcessingMachineBlockEntity
-import lekkit.scev.blockentity.PulperBlockEntity
 import lekkit.scev.expansion.ExpansionCardKind
 import net.minecraft.ChatFormatting
 import net.minecraft.nbt.CompoundTag
@@ -19,25 +18,20 @@ import snownee.jade.api.ITooltip
 import snownee.jade.api.config.IPluginConfig
 
 /**
- * Jade provider for [PulperBlockEntity] (and any future
- * [ProcessingMachineBlockEntity] subclass via the same code path —
- * just point the registration at a different BE type).
+ * Jade provider shared across every [ProcessingMachineBlockEntity]
+ * subclass — one UID covers all of them since the surface is uniform
+ * (slot 0 = input, 1 = output, 2+ = expansion).
  *
  * Surfaces:
  *  - Input slot: "● item.name" / "○" if empty
  *  - Output slot: same
  *  - Progress: "[████░░░░] 50%" when running, suppressed otherwise
  *  - Installed expansion cards: "Cards: Serial, I²C" / "—" if none
- *
- * Why a single provider for all processing machines: the machine
- * surface is uniform (slot 0 = input, 1 = output, 2+ = expansion).
- * Subclasses pick the recipe type but JADE doesn't care which —
- * progress is progress, slots are slots.
  */
-class PulperProvider private constructor() :
+class ProcessingMachineProvider private constructor() :
     IBlockComponentProvider, IServerDataProvider<BlockAccessor> {
 
-    override fun getUid(): ResourceLocation = ScevJadeIds.PULPER
+    override fun getUid(): ResourceLocation = ScevJadeIds.PROCESSING_MACHINE
 
     override fun appendServerData(data: CompoundTag, acc: BlockAccessor) {
         val be = acc.blockEntity as? ProcessingMachineBlockEntity ?: return
@@ -102,6 +96,6 @@ class PulperProvider private constructor() :
             Component.literal("● $name").withStyle(ChatFormatting.GREEN)
 
     companion object {
-        @JvmField val INSTANCE: PulperProvider = PulperProvider()
+        @JvmField val INSTANCE: ProcessingMachineProvider = ProcessingMachineProvider()
     }
 }

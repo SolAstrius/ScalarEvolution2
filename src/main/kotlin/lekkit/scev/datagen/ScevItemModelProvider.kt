@@ -55,14 +55,11 @@ class ScevItemModelProvider(
             "layer0",
             ResourceLocation.fromNamespaceAndPath(ScalarEvolution.MODID, "item/nvme"))
 
-        // Paper / ink / ribbon chain + expansion cards — placeholder
-        // models pointing at vanilla MC item textures. Replaces with
+        // Ink / ribbon chain + expansion cards — placeholder models
+        // pointing at vanilla MC item textures. Replaces with
         // hand-painted PNGs later; the model JSON paths stay scev:
         // namespace so swapping is just dropping a PNG into our
         // textures dir + re-running datagen.
-        vanillaTextured(ScevRegistry.PULP_SLURRY,        "minecraft:item/sugar")
-        vanillaTextured(ScevRegistry.WET_PAPER_SHEET,    "minecraft:item/paper")
-        vanillaTextured(ScevRegistry.PAPER_SHEET,        "minecraft:item/paper")
         vanillaTextured(ScevRegistry.BINDER,             "minecraft:item/honey_bottle")
         vanillaTextured(ScevRegistry.PAPER_ROLL,         "minecraft:item/paper")
         vanillaTextured(ScevRegistry.PIGMENT,            "minecraft:item/black_dye")

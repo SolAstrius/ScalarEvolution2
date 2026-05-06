@@ -170,9 +170,10 @@ abstract class ProcessingMachineBlockEntity(
             return
         }
         if (!canProduceOutput(recipe)) return
-        // Subclass-controlled gate (e.g. Pulper requires water in
-        // its tank). Pause the timer here rather than reset, so the
-        // player adding water resumes mid-craft.
+        // Subclass-controlled gate (e.g. a future power-aware machine
+        // could pause when its energy buffer drains). Pause the timer
+        // here rather than reset, so the player resuming the input
+        // continues mid-craft.
         if (!canTickRecipe(recipe)) return
         progressTicks++
         if (progressTicks >= recipe.processingTime) {
@@ -188,8 +189,8 @@ abstract class ProcessingMachineBlockEntity(
     protected open fun canTickRecipe(recipe: MachineRecipe): Boolean = true
 
     /** Subclass hook — fired after [consumeAndProduce] succeeds.
-     *  Pulper drains water here; future power-aware machines drain
-     *  energy here. Default: no-op. */
+     *  Future power-aware machines would drain energy here. Default:
+     *  no-op. */
     protected open fun onCraftComplete(recipe: MachineRecipe) {}
 
     private fun currentRecipe(level: Level): MachineRecipe? {

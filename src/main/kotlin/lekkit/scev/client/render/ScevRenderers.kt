@@ -13,14 +13,10 @@ import lekkit.scev.client.screen.FlashProgrammerScreen
 import lekkit.scev.client.screen.MachineScreen
 import lekkit.scev.client.screen.McuBoardScreen
 import lekkit.scev.client.screen.MotherboardScreen
-import lekkit.scev.client.screen.DryerScreen
 import lekkit.scev.client.screen.InkMixerScreen
-import lekkit.scev.client.screen.PulperScreen
 import lekkit.scev.client.screen.RibbonImpregnatorScreen
-import lekkit.scev.client.screen.SheetFormerScreen
 import lekkit.scev.client.screen.TeletypeScreen
 import lekkit.scev.client.screen.TerminalScreen
-import lekkit.scev.client.screen.WinderScreen
 import lekkit.scev.main.ScevRegistry
 import net.minecraft.client.resources.model.ModelResourceLocation
 import net.neoforged.neoforge.client.event.EntityRenderersEvent
@@ -43,10 +39,6 @@ object ScevRenderers {
         e.register(ScevRegistry.MCU_BOARD_MENU.get(),        ::McuBoardScreen)
         e.register(ScevRegistry.FLASH_PROGRAMMER_MENU.get(), ::FlashProgrammerScreen)
         e.register(ScevRegistry.TERMINAL_MENU.get(),            ::TerminalScreen)
-        e.register(ScevRegistry.PULPER_MENU.get(),             ::PulperScreen)
-        e.register(ScevRegistry.SHEET_FORMER_MENU.get(),       ::SheetFormerScreen)
-        e.register(ScevRegistry.DRYER_MENU.get(),              ::DryerScreen)
-        e.register(ScevRegistry.WINDER_MENU.get(),             ::WinderScreen)
         e.register(ScevRegistry.INK_MIXER_MENU.get(),          ::InkMixerScreen)
         e.register(ScevRegistry.RIBBON_IMPREGNATOR_MENU.get(), ::RibbonImpregnatorScreen)
         e.register(ScevRegistry.TELETYPE_MENU.get(),           ::TeletypeScreen)

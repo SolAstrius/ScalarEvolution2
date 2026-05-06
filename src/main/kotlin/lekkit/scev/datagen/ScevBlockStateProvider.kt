@@ -70,16 +70,9 @@ class ScevBlockStateProvider(
         // re-skinned once proper block art is finished.
         simpleCubeBlock(ScevRegistry.FLASH_PROGRAMMER, "flash_programmer")
 
-        // Pulper — placeholder PIL-generated drum texture. The block
-        // is symmetric (no front face), so the cube_all / simpleBlock
-        // pattern fits. When the other processing machines land
-        // (SheetFormer, Dryer, Winder, InkMixer, RibbonImpregnator)
-        // they each get their own simpleCubeBlock entry with the
-        // matching pre-generated texture.
-        simpleCubeBlock(ScevRegistry.PULPER,             "pulper")
-        simpleCubeBlock(ScevRegistry.SHEET_FORMER,       "sheet_former")
-        simpleCubeBlock(ScevRegistry.DRYER,              "dryer")
-        simpleCubeBlock(ScevRegistry.WINDER,             "winder")
+        // Ink/ribbon machines — symmetric blocks (no front face) so the
+        // cube_all / simpleBlock pattern fits. Each gets its own
+        // simpleCubeBlock entry with a pre-generated texture.
         simpleCubeBlock(ScevRegistry.INK_MIXER,          "ink_mixer")
         simpleCubeBlock(ScevRegistry.RIBBON_IMPREGNATOR, "ribbon_impregnator")
         simpleCubeBlock(ScevRegistry.TELETYPE,           "teletype")

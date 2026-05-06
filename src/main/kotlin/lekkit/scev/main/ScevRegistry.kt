@@ -181,19 +181,12 @@ object ScevRegistry {
     @JvmField val CABLE            = blockWithItem("cable",            { CableBlock(machineProps()) })
     @JvmField val FLASH_PROGRAMMER = blockWithItem("flash_programmer", { FlashProgrammerBlock(machineProps()) }, single = true)
 
-    // ---- Processing machines (paper / ink / ribbon production) ---------------
-    @JvmField val PULPER             = blockWithItem("pulper",             { PulperBlock(machineProps()) }, single = true)
-    @JvmField val SHEET_FORMER       = blockWithItem("sheet_former",       { SheetFormerBlock(machineProps()) }, single = true)
-    @JvmField val DRYER              = blockWithItem("dryer",              { DryerBlock(machineProps()) }, single = true)
-    @JvmField val WINDER             = blockWithItem("winder",             { WinderBlock(machineProps()) }, single = true)
+    // ---- Processing machines (ink / ribbon production) ---------------------
     @JvmField val INK_MIXER          = blockWithItem("ink_mixer",          { InkMixerBlock(machineProps()) }, single = true)
     @JvmField val RIBBON_IMPREGNATOR = blockWithItem("ribbon_impregnator", { RibbonImpregnatorBlock(machineProps()) }, single = true)
     @JvmField val TELETYPE           = blockWithItem("teletype",           { TeletypeBlock(machineProps()) }, single = true)
 
-    // ---- Paper / ink / ribbon items -----------------------------------------
-    @JvmField val PULP_SLURRY     = ITEMS.register("pulp_slurry",     Supplier { PulpSlurryItem(itemProps()) })
-    @JvmField val WET_PAPER_SHEET = ITEMS.register("wet_paper_sheet", Supplier { WetPaperSheetItem(singleProps()) })
-    @JvmField val PAPER_SHEET     = ITEMS.register("paper_sheet",     Supplier { PaperSheetItem(itemProps()) })
+    // ---- Teletype consumables + ink-chain items -----------------------------
     @JvmField val PAPER_ROLL      = ITEMS.register("paper_roll",      Supplier { PaperRollItem(singleProps()) })
     @JvmField val PIGMENT         = ITEMS.register("pigment",         Supplier { PigmentItem(itemProps()) })
     @JvmField val BINDER          = ITEMS.register("binder",          Supplier { BinderItem(itemProps()) })
@@ -288,10 +281,6 @@ object ScevRegistry {
     @JvmField val MCU_BOARD_BE        = blockEntityType("mcu_board",        MCU_BOARD,        ::McuBoardBlockEntity)
     @JvmField val CABLE_BE            = blockEntityType("cable",            CABLE,            ::CableBlockEntity)
     @JvmField val FLASH_PROGRAMMER_BE = blockEntityType("flash_programmer", FLASH_PROGRAMMER, ::FlashProgrammerBlockEntity)
-    @JvmField val PULPER_BE             = blockEntityType("pulper",             PULPER,             ::PulperBlockEntity)
-    @JvmField val SHEET_FORMER_BE       = blockEntityType("sheet_former",       SHEET_FORMER,       ::SheetFormerBlockEntity)
-    @JvmField val DRYER_BE              = blockEntityType("dryer",              DRYER,              ::DryerBlockEntity)
-    @JvmField val WINDER_BE             = blockEntityType("winder",             WINDER,             ::WinderBlockEntity)
     @JvmField val INK_MIXER_BE          = blockEntityType("ink_mixer",          INK_MIXER,          ::InkMixerBlockEntity)
     @JvmField val RIBBON_IMPREGNATOR_BE = blockEntityType("ribbon_impregnator", RIBBON_IMPREGNATOR, ::RibbonImpregnatorBlockEntity)
     @JvmField val TELETYPE_BE           = blockEntityType("teletype",           TELETYPE,           ::TeletypeBlockEntity)
@@ -302,10 +291,6 @@ object ScevRegistry {
     @JvmField val MACHINE_MENU          = menuType("machine",          MachineMenu::fromNetwork)
     @JvmField val MCU_BOARD_MENU        = menuType("mcu_board",        McuBoardMenu::fromNetwork)
     @JvmField val FLASH_PROGRAMMER_MENU = menuType("flash_programmer", FlashProgrammerMenu::fromNetwork)
-    @JvmField val PULPER_MENU             = menuType("pulper",             PulperMenu::fromNetwork)
-    @JvmField val SHEET_FORMER_MENU       = menuType("sheet_former",       SheetFormerMenu::fromNetwork)
-    @JvmField val DRYER_MENU              = menuType("dryer",              DryerMenu::fromNetwork)
-    @JvmField val WINDER_MENU             = menuType("winder",             WinderMenu::fromNetwork)
     @JvmField val INK_MIXER_MENU          = menuType("ink_mixer",          InkMixerMenu::fromNetwork)
     @JvmField val RIBBON_IMPREGNATOR_MENU = menuType("ribbon_impregnator", RibbonImpregnatorMenu::fromNetwork)
     @JvmField val TELETYPE_MENU           = menuType("teletype",           TeletypeMenu::fromNetwork)
@@ -338,38 +323,26 @@ object ScevRegistry {
         })
 
     /**
-     * Separate tab for the paper / ink / ribbon production line plus the
-     * expansion-card hardware. Vanilla-style sectioning via empty-row
-     * spacers between groups (the section-banner mixin path is reserved
-     * for the main tab; second-tab banners would need extending the
-     * mixin to handle multiple tabs).
+     * Separate tab for the ink / ribbon production line, the teletype,
+     * and the expansion-card hardware.
      *
      * Sections in display order:
-     *   1. Machines  — Pulper, SheetFormer, Dryer, Winder, InkMixer,
-     *                  RibbonImpregnator
-     *   2. Items     — PulpSlurry, PaperSheet, PaperRoll, Pigment,
-     *                  InkJar, Ribbon
+     *   1. Machines  — InkMixer, RibbonImpregnator, Teletype
+     *   2. Items     — PaperRoll, Pigment, Binder, InkJar, Ribbon
      *   3. Cards     — SerialPort, I2C, RTC, GPIO
      */
     @JvmField val FABRICATION_TAB: Supplier<CreativeModeTab> =
         CREATIVE_MODE_TABS.register("fabrication", Supplier {
             CreativeModeTab.builder()
                 .title(Component.translatable("itemGroup.scev.fabrication"))
-                .icon { ItemStack(PULPER.get().asItem()) }
+                .icon { ItemStack(INK_MIXER.get().asItem()) }
                 .displayItems { _, output ->
                     // Section 1: Machines.
-                    output.accept(PULPER.get())
-                    output.accept(SHEET_FORMER.get())
-                    output.accept(DRYER.get())
-                    output.accept(WINDER.get())
                     output.accept(INK_MIXER.get())
                     output.accept(RIBBON_IMPREGNATOR.get())
                     output.accept(TELETYPE.get())
 
                     // Section 2: Chain items.
-                    output.accept(PULP_SLURRY.get())
-                    output.accept(WET_PAPER_SHEET.get())
-                    output.accept(PAPER_SHEET.get())
                     output.accept(PAPER_ROLL.get())
                     output.accept(PIGMENT.get())
                     output.accept(BINDER.get())
@@ -395,9 +368,8 @@ object ScevRegistry {
         }
 
         // Cases & peripherals — block items, registered alongside each block
-        // by [blockWithItem] under the same name.
-        // Cases + peripherals — paper/ink/ribbon machines live in the
-        // separate FABRICATION_TAB below, not here.
+        // by [blockWithItem] under the same name. Ink / ribbon production
+        // machines live in the separate FABRICATION_TAB below, not here.
         assign(SECTION_CASES,
             WORKSTATION, POWERMARK, TINKERPAD, POCKET_COMPUTER,
             VT100, VT220, VT340, VT420, VT520,

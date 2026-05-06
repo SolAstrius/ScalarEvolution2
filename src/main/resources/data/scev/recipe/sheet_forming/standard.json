@@ -1,6 +1,0 @@
-{
-  "type": "scev:sheet_forming",
-  "ingredient": { "item": "scev:pulp_slurry" },
-  "result": { "id": "scev:wet_paper_sheet", "count": 1 },
-  "time": 80
-}

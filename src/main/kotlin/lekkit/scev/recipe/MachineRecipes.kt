@@ -18,8 +18,8 @@ import net.neoforged.neoforge.registries.DeferredRegister
 /**
  * One [RecipeType] per processing-machine kind, plus the matching
  * [RecipeSerializer]. Datapack JSON addresses these as
- * `scev:pulping`, `scev:sheet_forming`, etc.; the BE class binds to
- * one of them and only matches recipes registered against that type.
+ * `scev:ink_mixing`, `scev:ribboning`; the BE class binds to one of
+ * them and only matches recipes registered against that type.
  *
  * Adding a new machine kind: add a `register("name")` line below and
  * a matching block + BE in [lekkit.scev.main.ScevRegistry] /
@@ -31,30 +31,6 @@ object MachineRecipes {
         DeferredRegister.create(Registries.RECIPE_TYPE, ScalarEvolution.MODID)
     val RECIPE_SERIALIZERS: DeferredRegister<RecipeSerializer<*>> =
         DeferredRegister.create(Registries.RECIPE_SERIALIZER, ScalarEvolution.MODID)
-
-    /* ---- pulping: organic feedstock + water → pulp slurry ---- */
-    val PULPING_TYPE: DeferredHolder<RecipeType<*>, RecipeType<MachineRecipe>> =
-        registerType("pulping")
-    val PULPING_SERIALIZER: DeferredHolder<RecipeSerializer<*>, RecipeSerializer<MachineRecipe>> =
-        registerSerializer("pulping") { PULPING_TYPE.get() }
-
-    /* ---- sheet_forming: pulp slurry → wet paper sheet ---- */
-    val SHEET_FORMING_TYPE: DeferredHolder<RecipeType<*>, RecipeType<MachineRecipe>> =
-        registerType("sheet_forming")
-    val SHEET_FORMING_SERIALIZER: DeferredHolder<RecipeSerializer<*>, RecipeSerializer<MachineRecipe>> =
-        registerSerializer("sheet_forming") { SHEET_FORMING_TYPE.get() }
-
-    /* ---- drying: wet sheet → dry sheet ---- */
-    val DRYING_TYPE: DeferredHolder<RecipeType<*>, RecipeType<MachineRecipe>> =
-        registerType("drying")
-    val DRYING_SERIALIZER: DeferredHolder<RecipeSerializer<*>, RecipeSerializer<MachineRecipe>> =
-        registerSerializer("drying") { DRYING_TYPE.get() }
-
-    /* ---- winding: dry sheet → paper roll ---- */
-    val WINDING_TYPE: DeferredHolder<RecipeType<*>, RecipeType<MachineRecipe>> =
-        registerType("winding")
-    val WINDING_SERIALIZER: DeferredHolder<RecipeSerializer<*>, RecipeSerializer<MachineRecipe>> =
-        registerSerializer("winding") { WINDING_TYPE.get() }
 
     /* ---- ink_mixing: pigment → ink jar (binder + water assumed) ---- */
     val INK_MIXING_TYPE: DeferredHolder<RecipeType<*>, RecipeType<MachineRecipe>> =
