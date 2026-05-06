@@ -307,7 +307,7 @@ object ScevPeripheralMethods {
                 if (mainThread) add("mainThread")
                 if (unsafe) add("unsafe")
                 if (acceptsRawArgs) add("varargs")
-            }.joinToString(",").let { if (it.isEmpty()) "" else " [$it]" }
+            }.joinToString(" ") { "[$it]" }.let { if (it.isEmpty()) "" else " $it" }
             val psOut = if (acceptsRawArgs && ps.isEmpty()) "..." else if (acceptsRawArgs) "$ps, ..." else ps
             return "$name($psOut) -> $ret$flags"
         }
