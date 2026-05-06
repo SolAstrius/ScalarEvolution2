@@ -46,6 +46,27 @@ logoFile="icon.png"
     ordering="AFTER"
     side="BOTH"
 
+# Create: Power Grid — optional integration target (electricity sim atop
+# Create). Hard-deps Create + Architectury when present; our compat
+# classes are ModList-gated so absence is safe.
+[[dependencies.${mod_id}]]
+    modId="powergrid"
+    type="optional"
+    versionRange="[0.5,)"
+    ordering="AFTER"
+    side="BOTH"
+
+# Create — optional cross-mod integration target (lekkit.scev.compat.create.*,
+# when populated). Soft-dep: compat classes guard with ModList checks so
+# Create's absence is safe. Version range floor is the 6.0.x line that
+# matches our 1.21.1 / NeoForge 21.1.x baseline.
+[[dependencies.${mod_id}]]
+    modId="create"
+    type="optional"
+    versionRange="[6.0,)"
+    ordering="AFTER"
+    side="BOTH"
+
 # Mixin config: creative tab section-banner injections live here.
 # Client-side only — banners are pure UI decoration and the server never
 # builds the creative-tab item list.

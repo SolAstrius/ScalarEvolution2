@@ -65,6 +65,39 @@ repositories {
         url = "https://maven.su5ed.dev/releases"
         content { includeGroup "org.sinytra.forgified-fabric-api" }
     }
+    // CreateMod maven — Create itself + its mandatory runtime stack
+    // (Ponder, Flywheel, Registrate). Unlike the Modrinth maven (which
+    // serves only the binary), this one publishes real POM + Gradle
+    // module metadata, so transitive resolution works. Scoped to the
+    // groups Create's POM actually pulls so unrelated artifacts can't
+    // accidentally resolve through here.
+    maven {
+        name = "CreateMod"
+        url = "https://maven.createmod.net"
+        content {
+            includeGroup "com.simibubi.create"
+            includeGroup "com.tterrag.registrate"
+            includeGroup "net.createmod.ponder"
+            includeGroup "dev.engine-room.flywheel"
+            includeGroup "dev.engine-room.vanillin"
+        }
+    }
+    // IThundxr's snapshots — Registrate publishes here (the ${registrate_version}
+    // string in Create's POM matches a snapshot artifact). Pulled in as
+    // a transitive of Create only.
+    maven {
+        name = "IThundxr"
+        url = "https://maven.ithundxr.dev/snapshots"
+        content { includeGroup "com.tterrag.registrate" }
+    }
+    // Architectury — cross-loader API required by Create: Power Grid (and
+    // any other Architectury-built addon we layer on later). Scoped to
+    // the dev.architectury group so unrelated artifacts don't route here.
+    maven {
+        name = "Architectury"
+        url = "https://maven.architectury.dev"
+        content { includeGroup "dev.architectury" }
+    }
 }
 
 base {
@@ -261,6 +294,45 @@ dependencies {
     // machine for the printer's paper/ink/page fields.
     testImplementation 'org.mockito:mockito-core:5.15.2'
     testImplementation 'org.mockito.kotlin:mockito-kotlin:5.4.0'
+
+    // Create — soft-dep target for cross-mod integration under
+    // lekkit.scev.compat.create. Resolved from CreateMod's maven (see
+    // the repository{} block above), which ships proper POM + Gradle
+    // module metadata — the runtimeOnly here pulls Flywheel, Ponder,
+    // Registrate transitively so dev runs load Create out of the box.
+    // Same compile/runtime split as CC: Tweaked above (compileOnly
+    // keeps the production jar slim; ScevCreate* compat classes are
+    // ModList-gated so absence at runtime is safe).
+    // Excludes: Create's POM declares its own cross-mod integration
+    // targets (FTB Chunks/Library/Teams, Architectury, JourneyMap API,
+    // Curios) as runtime-scope transitives. None are needed for scev's
+    // use of Create — Create itself runs fine without them, those
+    // modules are just dormant. Pulling them would require wiring four
+    // more mavens (ftb.dev, architectury.dev, jm.gserv.me,
+    // theillusivec4.top); excluding here keeps our repo list focused on
+    // what scev actually links against.
+    def createIntegrationExclusions = {
+        exclude group: "dev.ftb.mods"
+        exclude group: "dev.architectury"
+        exclude group: "info.journeymap"
+        exclude group: "top.theillusivec4.curios"
+    }
+    compileOnly("com.simibubi.create:create-${minecraft_version}:${create_version}", createIntegrationExclusions)
+    runtimeOnly("com.simibubi.create:create-${minecraft_version}:${create_version}", createIntegrationExclusions)
+
+    // Create: Power Grid — patryk3211's electricity-physics layer for
+    // Create. Hits a pin on Modrinth's maven: PowerGrid publishes BOTH
+    // a Forge 1.20.1 jar and a NeoForge 1.21.1 jar under version slug
+    // `0.5.5.1` (no loader discriminator), and Modrinth's maven serves
+    // the Forge one — which throws "for Forge or older NeoForge" at
+    // mod load. Sidestep by fetching the correct file from the
+    // Modrinth CDN by direct URL via fetchPowerGridJar (further down)
+    // and depending on the local copy as a file. Architectury is a
+    // hard runtime dep declared in PowerGrid's mods.toml, pulled
+    // independently from maven.architectury.dev.
+    compileOnly files("${buildDir}/external/powergrid-mc${minecraft_version}-${power_grid_version}.jar")
+    runtimeOnly files("${buildDir}/external/powergrid-mc${minecraft_version}-${power_grid_version}.jar")
+    runtimeOnly "dev.architectury:architectury-neoforge:${architectury_version}"
 
     // JEI — dev-time recipe browser. The compileOnly api line is for the
     // single JEI plugin we ship: ScevJeiPlugin returns the MachineScreen's
@@ -974,6 +1046,80 @@ tasks.register('fetchAlpineImage') {
 
 
 processResources.dependsOn 'fetchAlpineImage'
+
+// --------------------------------------------------------------------
+// Create: Power Grid jar — fetched from the Modrinth CDN by direct URL
+// --------------------------------------------------------------------
+// PowerGrid publishes a Forge 1.20.1 jar and a NeoForge 1.21.1 jar at
+// the same Modrinth version slug (`0.5.5.1`). Modrinth's maven keys
+// only on (slug, version) so the request `maven.modrinth:power-grid:
+// 0.5.5.1` resolves to the Forge one — which NeoForge 21.1 rejects at
+// mod-load time with "for Forge or older NeoForge".
+//
+// The Modrinth REST API does carry the loader discriminator. We pin a
+// CDN file URL + sha512 from a one-time API probe; the task downloads
+// to build/external/, verifies the hash, and the runtimeOnly/compileOnly
+// `files(...)` declarations above pick it up. To bump versions: re-probe
+// the API (`curl https://api.modrinth.com/v2/project/power-grid/version`),
+// update both the URL and sha512 below, and bump power_grid_version.
+ext.powerGridUrl = 'https://cdn.modrinth.com/data/eWiBLJ9R/versions/8EtGIOFr/powergrid-mc1.21.1-0.5.5.1.jar'
+ext.powerGridSha512 = '0dafe82438143270a762f9bfff3483c56e85a5db0bb382dba15302b6d6f6a886f252dee42fca08fb46c7a76eb9401f90430d41994b20133e9c009d5b876b8bb5'
+
+tasks.register('fetchPowerGridJar') {
+    group = 'modCompat'
+    description = "Download powergrid-mc${minecraft_version}-${power_grid_version}.jar from Modrinth CDN"
+
+    def destDir  = file("${buildDir}/external")
+    def destFile = new File(destDir, "powergrid-mc${minecraft_version}-${power_grid_version}.jar")
+    def expected = powerGridSha512
+
+    inputs.property('url', powerGridUrl)
+    inputs.property('sha512', expected)
+    outputs.file destFile
+
+    doLast {
+        destDir.mkdirs()
+
+        // Re-fetch when missing OR when hash disagrees (e.g. cache from a
+        // previous version pin still on disk). Mismatch is fatal — we
+        // never silently use unverified bytes from a remote.
+        def needFetch = !destFile.exists()
+        if (!needFetch) {
+            def have = java.security.MessageDigest.getInstance('SHA-512')
+                    .digest(destFile.bytes)
+                    .encodeHex().toString()
+            if (have != expected) {
+                logger.lifecycle("Cached ${destFile.name} sha512 mismatch — refetching")
+                delete destFile
+                needFetch = true
+            }
+        }
+
+        if (needFetch) {
+            logger.lifecycle("Downloading ${destFile.name} from Modrinth CDN")
+            exec { commandLine 'curl', '-fL', '--progress-bar',
+                    '-o', destFile.absolutePath, powerGridUrl }
+        }
+
+        def actual = java.security.MessageDigest.getInstance('SHA-512')
+                .digest(destFile.bytes)
+                .encodeHex().toString()
+        if (actual != expected) {
+            destFile.delete()
+            throw new GradleException(
+                "PowerGrid jar sha512 mismatch:\n  expected ${expected}\n  got      ${actual}\n" +
+                "Either the pin is stale (re-probe Modrinth) or the CDN object changed.")
+        }
+        logger.lifecycle("Verified ${destFile.name} (sha512 OK)")
+    }
+}
+
+// Make every task that references the jar depend on the fetch — both
+// compile (via the compileOnly `files(...)` above) and dev-run startup
+// (NeoForge's mod discovery scans runtimeClasspath at run time).
+tasks.matching { it.name == 'compileJava' || it.name == 'compileKotlin'
+        || it.name in ['runClient', 'runServer', 'runData', 'runGameTestServer'] }
+        .configureEach { dependsOn 'fetchPowerGridJar' }
 
 idea {
     module {
