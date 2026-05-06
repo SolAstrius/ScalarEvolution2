@@ -114,6 +114,17 @@ object ScevCreativeTab {
                         bucket += stack
                     }
                 }
+                item is lekkit.scev.items.TinkerpadHandheldItem -> {
+                    // Two variants:
+                    //  - empty (the default item — for players who want to
+                    //    populate components themselves via /give or a future
+                    //    edit GUI)
+                    //  - pre-built ready-to-boot rig: CPU2 + OPEN_FW flash +
+                    //    RAM5 + Alpine NVMe. Saves the seven-line /give
+                    //    command for spot-testing the screen pipeline.
+                    bucket += item.defaultInstance
+                    bucket += buildPrebuiltHandheld(item)
+                }
                 else -> bucket += item.defaultInstance
             }
         }
@@ -158,6 +169,31 @@ object ScevCreativeTab {
             val padding = if (rem == 0) 9 else (9 - rem) + 9
             repeat(padding) { displayItems.accept(ItemStack.EMPTY) }
         }
+    }
+
+    /**
+     * Build a ready-to-boot handheld stack: tier-2 CPU, OpenSBI+U-Boot
+     * flash, max RAM, Alpine-preloaded NVMe. Same layout the manual
+     * /give incantation produces — kept here so the long command isn't
+     * the only path to a bootable handheld.
+     */
+    private fun buildPrebuiltHandheld(item: Item): ItemStack {
+        val stack = ItemStack(item)
+        val items = net.minecraft.core.NonNullList.withSize(
+            lekkit.scev.items.MotherboardItem.INVENTORY_SIZE, ItemStack.EMPTY)
+        items[lekkit.scev.items.MotherboardItem.SLOT_CPU] =
+            ItemStack(lekkit.scev.main.ScevRegistry.CPU2.get())
+        val flash = ItemStack(lekkit.scev.main.ScevRegistry.FLASH_CHIP.get())
+        flash.set(ScevDataComponents.FIRMWARE_KIND.get(), FlashFirmware.OPEN_FW)
+        items[lekkit.scev.items.MotherboardItem.SLOT_FLASH] = flash
+        items[lekkit.scev.items.MotherboardItem.SLOT_RAM_START] =
+            ItemStack(lekkit.scev.main.ScevRegistry.RAM_SODIMM5.get())
+        val nvme = ItemStack(lekkit.scev.main.ScevRegistry.NVME_PRELOADED.get())
+        nvme.set(ScevDataComponents.DISK_TEMPLATE.get(), DiskTemplateRegistry.ALPINE)
+        items[lekkit.scev.items.MotherboardItem.SLOT_NVME_START] = nvme
+        stack.set(ScevDataComponents.MOTHERBOARD_INVENTORY.get(),
+            net.minecraft.world.item.component.ItemContainerContents.fromItems(items))
+        return stack
     }
 
     /* ----- Banner render -------------------------------------------------- */

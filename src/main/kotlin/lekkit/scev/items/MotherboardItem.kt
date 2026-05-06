@@ -17,7 +17,7 @@ import net.minecraft.world.item.ItemStack
 import net.minecraft.world.item.TooltipFlag
 import net.minecraft.world.level.Level
 
-class MotherboardItem(props: Properties, val level: Int) : Item(props) {
+open class MotherboardItem(props: Properties, val level: Int) : Item(props) {
 
     fun ramSlots(): Int = when (level) { 1 -> 2; 2 -> 3; 3 -> 4; else -> 0 }
     fun pciSlots(): Int = when (level) { 1 -> 2; 2 -> 4; 3 -> 6; else -> 0 }

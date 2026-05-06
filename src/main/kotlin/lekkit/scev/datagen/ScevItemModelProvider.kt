@@ -80,6 +80,12 @@ class ScevItemModelProvider(
         vanillaTextured(ScevRegistry.I2C_CARD,            "scev:item/pcb_base")
         vanillaTextured(ScevRegistry.RTC_CARD,            "scev:item/rtc_module")
         vanillaTextured(ScevRegistry.GPIO_EXPANSION_CARD, "scev:item/gpio_card")
+
+        // Handhelds — placeholder model reuses motherboard2 sprite (closest
+        // visual match to a "computer in your hand"). Real chassis model
+        // (3D, with a screen face) lands later; the BEWLR overlays the
+        // framebuffer onto whatever model this resolves to.
+        vanillaTextured(ScevRegistry.POCKET_COMPUTER, "scev:item/motherboard2")
     }
 
     /** Generate a `minecraft:item/generated` model that uses a vanilla

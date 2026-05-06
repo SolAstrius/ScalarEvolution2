@@ -7,7 +7,8 @@
   "client": [
     "creative_tab.CreativeModeInventoryScreenMixin",
     "creative_tab.CreativeModeTabMixin",
-    "creative_tab.ItemPickerMenuMixin"
+    "creative_tab.ItemPickerMenuMixin",
+    "handheld.ItemInHandRendererMixin"
   ],
   "injectors": {
     "defaultRequire": 1

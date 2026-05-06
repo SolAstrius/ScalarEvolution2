@@ -59,6 +59,29 @@ object ScevDataComponents {
         }
 
     /**
+     * Stable machine UUID for handheld computer items (phones, tablets,
+     * Game-Boy-style consoles). Plays the same role as the
+     * `MachineUUID` NBT tag on `ComputerCaseBlockEntity`: keys the
+     * running `MachineState` in `MachineManager` across re-equips and
+     * server restarts. Allocated lazily by the first tick that sees
+     * the stack — see `lekkit.scev.server.HandheldTickHost`.
+     *
+     * **Item duplication.** Vanilla stack copy carries components
+     * verbatim, so `/give`-style duplication or creative pick-block
+     * yields two stacks pointing at the same VM. The tick host
+     * dedupes per-tick (first stack wins). If duplication becomes a
+     * real concern, hook stack copy to clear this component (and any
+     * nested STORAGE_UUIDs) so the copy gets a fresh identity on
+     * first tick.
+     */
+    @JvmField
+    val MACHINE_UUID: DeferredHolder<DataComponentType<*>, DataComponentType<UUID>> =
+        DATA_COMPONENTS.registerComponentType("machine_uuid") { b ->
+            b.persistent(UUIDUtil.CODEC)
+             .networkSynchronized(UUIDUtil.STREAM_CODEC)
+        }
+
+    /**
      * Components installed into a motherboard item: CPU, flash, RAM,
      * NVMe, PCI cards. Up to 14 slots, laid out per
      * [lekkit.scev.items.MotherboardItem] constants.

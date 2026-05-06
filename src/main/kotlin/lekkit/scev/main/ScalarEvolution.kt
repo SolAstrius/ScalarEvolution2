@@ -75,6 +75,7 @@ class ScalarEvolution(modBus: IEventBus, container: ModContainer) {
             modBus.addListener(ScevClient::onRegisterReloadListeners)
             modBus.addListener(ScevRenderers::registerBlockEntityRenderers)
             modBus.addListener(ScevRenderers::registerMenuScreens)
+            modBus.addListener(ScevRenderers::registerClientExtensions)
             modBus.addListener(lekkit.scev.client.render.CrtFxShader::onRegisterShaders)
         }
 
@@ -120,6 +121,13 @@ class ScalarEvolution(modBus: IEventBus, container: ModContainer) {
         //     opt-in periodic sweep when enabled.
         NeoForge.EVENT_BUS.register(ItemLifecycleListener::class.java)
         NeoForge.EVENT_BUS.addListener(GcScheduler::onServerTick)
+
+        // HandheldTickHost.onServerTick drives RISC-V machines that live on
+        // handheld items in player inventories — same role serverTick plays
+        // for placed computer cases. Pause/unpause + grace-period destroy
+        // diff lives there.
+        NeoForge.EVENT_BUS.addListener(lekkit.scev.server.HandheldTickHost::onServerTick)
+        NeoForge.EVENT_BUS.addListener(lekkit.scev.server.HandheldTickHost::onServerStopping)
     }
 
     private fun onCommonSetup(event: FMLCommonSetupEvent) {

@@ -266,6 +266,16 @@ object ScevRegistry {
     @JvmField val MOTHERBOARD2 = motherboardTier(2)
     @JvmField val MOTHERBOARD3 = motherboardTier(3)
 
+    // ---- Handheld computers (item-form RISC-V machines) ---------------------
+    // POCKET_COMPUTER is the first concrete `IHandheldComputer` — the same
+    // motherboard layout as a tier-2 board, served as an item the player
+    // carries. VM lifecycle driven by `HandheldTickHost`. Future variants
+    // (phone, tablet, watch, e-reader) just register more `HandheldItem`
+    // subclasses with different chassis profiles.
+    @JvmField val POCKET_COMPUTER = ITEMS.register("pocket_computer", Supplier {
+        TinkerpadHandheldItem(singleProps(), motherboardLevel = 2)
+    })
+
     // ---- Block entities -----------------------------------------------------
     @JvmField val WORKSTATION_BE      = blockEntityType("workstation",     WORKSTATION,     ::WorkstationBlockEntity)
     @JvmField val POWERMARK_BE        = blockEntityType("powermark",       POWERMARK,       ::PowermarkBlockEntity)
@@ -389,7 +399,7 @@ object ScevRegistry {
         // Cases + peripherals — paper/ink/ribbon machines live in the
         // separate FABRICATION_TAB below, not here.
         assign(SECTION_CASES,
-            WORKSTATION, POWERMARK, TINKERPAD,
+            WORKSTATION, POWERMARK, TINKERPAD, POCKET_COMPUTER,
             VT100, VT220, VT340, VT420, VT520,
             CRT_MONITOR,
             KEYBOARD, KEYBOARD_MOUSE, MCU_BOARD, CABLE, FLASH_PROGRAMMER)

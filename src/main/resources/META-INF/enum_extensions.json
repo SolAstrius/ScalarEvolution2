@@ -1,0 +1,13 @@
+{
+  "entries": [
+    {
+      "enum": "net/minecraft/client/model/HumanoidModel$ArmPose",
+      "name": "SCEV_HANDHELD",
+      "constructor": "(ZLnet/neoforged/neoforge/client/IArmPoseTransformer;)V",
+      "parameters": {
+        "class": "lekkit/scev/client/render/HandheldArmPose",
+        "field": "PROXY"
+      }
+    }
+  ]
+}

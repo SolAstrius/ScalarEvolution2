@@ -10,6 +10,7 @@ import lekkit.scev.blockentity.ComputerCaseBlockEntity
 import lekkit.scev.blockentity.TinkerpadBlockEntity
 import lekkit.scev.main.ScevRegistry
 import lekkit.scev.server.IMachineHandle
+import lekkit.scev.server.ItemStackMachineHandle
 import net.minecraft.network.RegistryFriendlyByteBuf
 import net.minecraft.world.entity.player.Inventory
 import net.minecraft.world.entity.player.Player
@@ -46,12 +47,32 @@ class MachineMenu(
         machineHandle != null && machineHandle.isValid()
 
     companion object {
+        /** Discriminator for the network buf: opens against a placed BE. */
+        const val SOURCE_BLOCK: Byte = 0
+        /** Discriminator for the network buf: opens against a held handheld. */
+        const val SOURCE_HANDHELD: Byte = 1
+
         @JvmStatic
         fun fromNetwork(containerId: Int, inv: Inventory, buf: RegistryFriendlyByteBuf): MachineMenu {
-            val pos = buf.readBlockPos()
-            return when (val be = inv.player.level().getBlockEntity(pos)) {
-                is TinkerpadBlockEntity -> MachineMenu(containerId, inv, be.getMachineUUID(), be)
-                is ComputerCaseBlockEntity -> MachineMenu(containerId, inv, be.getMachineUUID(), be)
+            val source = buf.readByte()
+            return when (source) {
+                SOURCE_BLOCK -> {
+                    val pos = buf.readBlockPos()
+                    when (val be = inv.player.level().getBlockEntity(pos)) {
+                        is TinkerpadBlockEntity -> MachineMenu(containerId, inv, be.getMachineUUID(), be)
+                        is ComputerCaseBlockEntity -> MachineMenu(containerId, inv, be.getMachineUUID(), be)
+                        else -> MachineMenu(containerId, inv, UUID.randomUUID(), null)
+                    }
+                }
+                SOURCE_HANDHELD -> {
+                    val uuid = buf.readUUID()
+                    // Client side only needs the UUID to look up DisplayManager;
+                    // the IMachineHandle is server-authoritative and used for
+                    // stillValid + power/reset. ItemStackMachineHandle has no
+                    // dependency on world state (no level/pos), so it's safe
+                    // to construct on either side.
+                    MachineMenu(containerId, inv, uuid, ItemStackMachineHandle(uuid))
+                }
                 else -> MachineMenu(containerId, inv, UUID.randomUUID(), null)
             }
         }

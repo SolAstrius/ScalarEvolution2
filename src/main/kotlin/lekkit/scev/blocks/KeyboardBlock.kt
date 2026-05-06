@@ -72,9 +72,9 @@ class KeyboardBlock(props: Properties, private val hasMouse: Boolean) : Directio
             return InteractionResult.CONSUME
         }
 
-        sp.openScevMenu("container.scev.machine", boundPos) { id, inv ->
-            MachineMenu(id, inv, cc.getMachineUUID(), cc)
-        }
+        sp.openScevMenu("container.scev.machine",
+            { buf -> buf.writeByte(MachineMenu.SOURCE_BLOCK.toInt()); buf.writeBlockPos(boundPos) }
+        ) { id, inv -> MachineMenu(id, inv, cc.getMachineUUID(), cc) }
         return InteractionResult.CONSUME
     }
 

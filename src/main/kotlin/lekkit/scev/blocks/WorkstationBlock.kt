@@ -75,9 +75,9 @@ class WorkstationBlock(props: Properties) : DirectionalBlock(props) {
         // edit menu (ComputerCaseMenu).
         val wantsView = sp.isShiftKeyDown && cc.isPowered()
         if (wantsView) {
-            sp.openScevMenu("container.scev.machine", pos) { id, inv ->
-                MachineMenu(id, inv, cc.getMachineUUID(), cc)
-            }
+            sp.openScevMenu("container.scev.machine",
+                { buf -> buf.writeByte(MachineMenu.SOURCE_BLOCK.toInt()); buf.writeBlockPos(pos) }
+            ) { id, inv -> MachineMenu(id, inv, cc.getMachineUUID(), cc) }
         } else {
             sp.openScevMenu("container.scev.computer_case", pos) { id, inv ->
                 ComputerCaseMenu(id, inv, cc)
