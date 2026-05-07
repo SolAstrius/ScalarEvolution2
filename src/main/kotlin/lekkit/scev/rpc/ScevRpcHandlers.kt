@@ -35,8 +35,21 @@ object ScevRpcHandlers {
     private val LOG = LogUtils.getLogger()
 
     @JvmStatic
-    fun registerDefaults(d: RpcDispatcher, machineUuid: UUID) {
+    fun registerDefaults(d: RpcDispatcher, machineUuid: UUID, chunkStore: ChunkStore) {
         d.register(RpcProtocol.METHOD_PING) { _ -> MsgValue.of("pong") }
+
+        // Chunked-transfer pull surface: read_chunk(streamId, offset, max)
+        // returns a binary slice of a cached oversized response;
+        // discard_chunk(streamId) drops it early. Both surface a
+        // structured no_such_peer-style error when the stream is
+        // unknown — eviction or expiry are the most common causes,
+        // and the guest can react by re-issuing the original request.
+        d.register(RpcProtocol.METHOD_READ_CHUNK) { args ->
+            readChunk(chunkStore, args)
+        }
+        d.register(RpcProtocol.METHOD_DISCARD_CHUNK) { args ->
+            discardChunk(chunkStore, args)
+        }
 
         d.register(RpcProtocol.METHOD_LOG) { args ->
             val level = if (args.isNotEmpty() && args[0].isString) args[0].asString() else "info"
@@ -152,6 +165,54 @@ object ScevRpcHandlers {
         }.getOrDefault("unknown").let { MsgValue.of(it) }
 
         return MsgValue.ofMap(m)
+    }
+
+    /**
+     * `read_chunk(streamId: int, offset: int, max_len: int) -> bin`
+     *
+     * Returns a binary slice of an oversized Response cached in the
+     * per-machine [ChunkStore]. The guest stitches successive slices
+     * (offset += returned.length) until it has `total_size` bytes,
+     * then decodes locally as if the original Response had landed in
+     * one frame. An empty bytes return at offset == size signals EOF.
+     *
+     * Error: [RpcErrors.NO_SUCH_PEER] when the stream isn't present —
+     * could mean evicted (cap pressure or new chunked response pushed
+     * the old one out), expired (TTL), or already discarded. Caller
+     * should re-issue the original request.
+     */
+    @JvmStatic
+    private fun readChunk(store: ChunkStore, args: List<MsgValue>): MsgValue {
+        val streamId = requireLong(args, 0, "streamId")
+        val offset = requireLong(args, 1, "offset")
+        val maxLen = requireLong(args, 2, "max_len").toInt().coerceAtLeast(0)
+        val slice = store.read(streamId, offset, maxLen)
+            ?: throw RpcHandler.RpcException(
+                "unknown chunk stream: $streamId",
+                RpcErrors.NO_SUCH_PEER,
+            )
+        return MsgValue.of(slice)
+    }
+
+    /**
+     * `discard_chunk(streamId: int) -> bool`
+     *
+     * Drop an in-flight chunked response early. Returns whether the
+     * stream existed; idempotent on already-discarded ids. No error
+     * for unknown streams — discard is best-effort cleanup.
+     */
+    @JvmStatic
+    private fun discardChunk(store: ChunkStore, args: List<MsgValue>): MsgValue {
+        val streamId = requireLong(args, 0, "streamId")
+        return MsgValue.of(store.discard(streamId))
+    }
+
+    @Throws(RpcHandler.RpcException::class)
+    private fun requireLong(args: List<MsgValue>, idx: Int, name: String): Long {
+        if (args.size <= idx || !args[idx].isInt) {
+            throw RpcHandler.RpcException("expected integer argument: $name", RpcErrors.BAD_ARGS)
+        }
+        return args[idx].asInt()
     }
 
     /** Convenience for the first arg being a string. */

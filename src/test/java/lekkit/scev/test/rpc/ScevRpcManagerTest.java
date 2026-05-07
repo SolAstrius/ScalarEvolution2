@@ -111,6 +111,21 @@ final class ScevRpcManagerTest {
         assertEquals(1, mgr.eventsOut());
     }
 
+    @Test void unknownChunkStreamReturnsNoSuchPeerError() {
+        FakeMachineBackend.FakeSerial serial = new FakeMachineBackend.FakeSerial();
+        ScevRpcManager mgr = ScevRpcManager.create(uuid, serial);
+
+        RpcFrame.Request r = new RpcFrame.Request(
+                1, RpcProtocol.METHOD_READ_CHUNK,
+                List.of(MsgValue.of(99999L), MsgValue.of(0L), MsgValue.of(64L)));
+        serial.produceTx(cobsFrame(RpcProtocol.encode(r)));
+        mgr.tick();
+
+        RpcFrame.Response rsp = (RpcFrame.Response) decodeFirst(serial.consumeRx());
+        assertNotNull(rsp.error());
+        assertEquals(lekkit.scev.core.rpc.RpcErrors.NO_SUCH_PEER, rsp.error().code());
+    }
+
     @Test void malformedFrameCountsAsDecodeFailure() {
         FakeMachineBackend.FakeSerial serial = new FakeMachineBackend.FakeSerial();
         ScevRpcManager mgr = ScevRpcManager.create(uuid, serial);
@@ -123,6 +138,16 @@ final class ScevRpcManagerTest {
     }
 
     /* ------------------ helpers ------------------ */
+
+    private static byte[] drainAll(FakeMachineBackend.FakeSerial serial) {
+        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+        while (true) {
+            byte[] rx = serial.consumeRx();
+            if (rx.length == 0) break;
+            out.write(rx, 0, rx.length);
+        }
+        return out.toByteArray();
+    }
 
     private static byte[] cobsFrame(byte[] plain) {
         byte[] out = new byte[Cobs.maxEncodedSize(plain.length)];

@@ -37,6 +37,13 @@ object RpcProtocol {
     const val METHOD_TRACE       = "trace"
     const val METHOD_SELF        = "self"
 
+    // Chunked-transfer pull methods. The host sends a TAG_CHUNKED
+    // frame in lieu of an oversized Response; the guest then issues
+    // [METHOD_READ_CHUNK] / [METHOD_DISCARD_CHUNK] requests to drain
+    // or abort the stream.
+    const val METHOD_READ_CHUNK    = "read_chunk"
+    const val METHOD_DISCARD_CHUNK = "discard_chunk"
+
     // Error-info map keys. Kept private — callers should construct
     // [RpcFrame.ErrorInfo] directly and let encode/decode handle the
     // wire shape.
@@ -65,6 +72,12 @@ object RpcProtocol {
                 arr += MsgValue.of(f.name)
                 arr += MsgValue.ofArray(f.args)
             }
+            is RpcFrame.Chunked -> {
+                arr += MsgValue.of(RpcFrame.TAG_CHUNKED.toLong())
+                arr += MsgValue.of(f.responseId)
+                arr += MsgValue.of(f.streamId)
+                arr += MsgValue.of(f.totalSize)
+            }
         }
         return MsgPack.encode(MsgValue.ofArray(arr))
     }
@@ -90,6 +103,7 @@ object RpcProtocol {
             RpcFrame.TAG_REQ -> decodeRequest(arr)
             RpcFrame.TAG_RSP -> decodeResponse(arr)
             RpcFrame.TAG_EVT -> decodeEvent(arr)
+            RpcFrame.TAG_CHUNKED -> decodeChunked(arr)
             else -> null
         }
     } catch (_: RuntimeException) {
@@ -142,5 +156,13 @@ object RpcProtocol {
         val name = (arr[1] as? MsgValue.Str)?.value ?: return null
         val args = (arr[2] as? MsgValue.Arr)?.value ?: return null
         return RpcFrame.Event(name, args)
+    }
+
+    private fun decodeChunked(arr: List<MsgValue>): RpcFrame? {
+        if (arr.size != 4) return null
+        val id = (arr[1] as? MsgValue.Int)?.value ?: return null
+        val streamId = (arr[2] as? MsgValue.Int)?.value ?: return null
+        val total = (arr[3] as? MsgValue.Int)?.value ?: return null
+        return RpcFrame.Chunked(id, streamId, total)
     }
 }

@@ -13,10 +13,18 @@ import lekkit.scev.core.rpc.RpcErrors
  * array whose first element is a small integer tag:
  *
  * ```
- *   [0, id, method, args]         - request
- *   [1, id, err_or_nil, result]   - response
- *   [2, name, args]               - event
+ *   [0, id, method, args]                - request
+ *   [1, id, err_or_nil, result]          - response
+ *   [2, name, args]                      - event
+ *   [3, id, stream_id, total_size]       - chunked response marker
  * ```
+ *
+ * The chunked marker stands in for a Response whose encoded form
+ * exceeds the wire frame cap. The original full Response bytes are
+ * cached host-side under `stream_id`; the guest reassembles them via
+ * `read_chunk(stream_id, offset, max)` calls and decodes the result
+ * as a normal [Response]. See [ScevRpcManager] for the chunking
+ * mechanics.
  *
  * `err_or_nil` is `nil` on success, or a map `{code: str, message: str}`
  * on error. (For backward-decoding tolerance, a bare string is also
@@ -60,10 +68,23 @@ sealed interface RpcFrame {
         @get:JvmName("args") val args: List<MsgValue>,
     ) : RpcFrame
 
+    /**
+     * Marker frame sent in lieu of a [Response] whose encoded size
+     * exceeds the wire cap. Guest fetches `total_size` bytes via
+     * `read_chunk(stream_id, ...)` and decodes the assembled buffer
+     * as a regular Response (with id == [responseId]).
+     */
+    data class Chunked(
+        @get:JvmName("responseId") val responseId: Long,
+        @get:JvmName("streamId") val streamId: Long,
+        @get:JvmName("totalSize") val totalSize: Long,
+    ) : RpcFrame
+
     companion object {
         const val TAG_REQ: Int = 0
         const val TAG_RSP: Int = 1
         const val TAG_EVT: Int = 2
+        const val TAG_CHUNKED: Int = 3
 
         @JvmStatic
         fun ok(id: Long, result: MsgValue?): Response =
@@ -83,5 +104,9 @@ sealed interface RpcFrame {
         @JvmStatic
         fun event(name: String, args: List<MsgValue>?): Event =
             Event(name, args ?: emptyList())
+
+        @JvmStatic
+        fun chunked(responseId: Long, streamId: Long, totalSize: Long): Chunked =
+            Chunked(responseId, streamId, totalSize)
     }
 }

@@ -129,6 +129,14 @@ class ScevRpcManager private constructor(
     private val drainBuf = ByteArray(DRAIN_CHUNK)
     private val encodeBuf = ByteArray(Cobs.maxEncodedSize(MAX_FRAME_BYTES))
 
+    /**
+     * Per-machine chunk cache for oversized Response payloads. Sized
+     * via the [ChunkStore] defaults — 4 outstanding streams, 8 MiB
+     * per stream, 32 MiB across the store, 30 s TTL. Drained by the
+     * guest via `read_chunk` / `discard_chunk` and swept each tick.
+     */
+    internal val chunkStore = ChunkStore(machineUuid)
+
     /* ---------------- counters ---------------- */
 
     private var requestsIn: Long = 0
@@ -187,6 +195,11 @@ class ScevRpcManager private constructor(
 
     /** Visible for tests; normally driven by [onServerTick]. */
     fun tick() {
+        // Sweep idle chunk streams older than the TTL so abandoned
+        // reads (guest crashed mid-fetch, never called discard) don't
+        // leak memory.
+        chunkStore.tickEvictExpired(System.currentTimeMillis())
+
         // Drain kernel-console UART — bytes go to a line-buffered DEBUG
         // log so boot messages are available in dev and invisible in
         // prod. Lines longer than the buffer are truncated (rare; a
@@ -336,33 +349,61 @@ class ScevRpcManager private constructor(
                 // Events from guest are not part of v1 either.
                 LOG.debug("[scev-rpc] {} received unexpected Event frame", machineUuid)
             }
+            is RpcFrame.Chunked -> {
+                // Chunked is host-emitted only — guest sees these and
+                // drains via read_chunk. Receiving one from the guest
+                // means something went very wrong upstream.
+                LOG.debug("[scev-rpc] {} received unexpected Chunked frame", machineUuid)
+            }
         }
     }
 
     /** Encode, COBS-frame, and push to the guest RX ring.
      *
-     *  When a Response is too large to fit, replace it with a
-     *  `frame_too_large` error response of the same id rather than
-     *  silently dropping it — the guest then gets a typed error
-     *  instead of waiting for a reply that's never coming. Events that
-     *  exceed the cap get logged and dropped (no id to correlate with;
-     *  the guest's event-aware code paths are designed to tolerate
-     *  drops anyway). */
+     *  When a Response is too large to fit, hand the encoded bytes to
+     *  the per-machine [chunkStore] and emit a tiny [RpcFrame.Chunked]
+     *  marker in its place. The guest then drains the response via
+     *  `read_chunk(streamId, offset, max)` calls and decodes the
+     *  reassembled bytes locally as a regular Response. If the payload
+     *  also exceeds the per-stream cap, fall back to a
+     *  `frame_too_large` error response — that's genuinely pathological
+     *  and a chunk store full of it would tank everyone else's headroom.
+     *
+     *  Events that exceed the cap get logged and dropped: no id to
+     *  correlate against, and the event-aware code paths already
+     *  tolerate drops. Chunked frames themselves are always tiny
+     *  (4 ints) so the recursion bottoms out trivially.
+     */
     private fun writeFrame(f: RpcFrame) {
         val payload = RpcProtocol.encode(f)
         if (payload.size > MAX_FRAME_BYTES) {
+            if (f is RpcFrame.Response) {
+                val streamId = chunkStore.add(payload, System.currentTimeMillis())
+                if (streamId != null) {
+                    LOG.debug(
+                        "[scev-rpc] {} chunking outbound response id={} ({} bytes) as stream {}",
+                        machineUuid, f.id, payload.size, streamId,
+                    )
+                    writeFrame(RpcFrame.chunked(f.id, streamId, payload.size.toLong()))
+                    return
+                }
+                LOG.warn(
+                    "[scev-rpc] {} response id={} too large to chunk ({} bytes)",
+                    machineUuid, f.id, payload.size,
+                )
+                writeFrame(
+                    RpcFrame.error(
+                        f.id,
+                        lekkit.scev.core.rpc.RpcErrors.FRAME_TOO_LARGE,
+                        "response payload ${payload.size} bytes exceeds per-stream cap",
+                    )
+                )
+                return
+            }
             LOG.warn(
-                "[scev-rpc] {} outbound frame larger than max ({} > {})",
+                "[scev-rpc] {} dropping outbound non-Response frame larger than max ({} > {})",
                 machineUuid, payload.size, MAX_FRAME_BYTES,
             )
-            if (f is RpcFrame.Response) {
-                val replacement = RpcFrame.error(
-                    f.id,
-                    lekkit.scev.core.rpc.RpcErrors.FRAME_TOO_LARGE,
-                    "response payload ${payload.size} bytes exceeds frame cap $MAX_FRAME_BYTES",
-                )
-                writeFrame(replacement)
-            }
             return
         }
         val enc = Cobs.encode(payload, 0, payload.size, encodeBuf, 0)
@@ -463,7 +504,7 @@ class ScevRpcManager private constructor(
                 return existing
             }
             val mgr = ScevRpcManager(uuid, serial)
-            ScevRpcHandlers.registerDefaults(mgr._dispatcher, uuid)
+            ScevRpcHandlers.registerDefaults(mgr._dispatcher, uuid, mgr.chunkStore)
             MANAGERS[uuid] = mgr
             for (listener in CREATE_LISTENERS) {
                 try {
