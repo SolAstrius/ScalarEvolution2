@@ -27,13 +27,41 @@ package lekkit.scev.rpc
  * [maxFrameBytes] caps per-frame encoded size. Anything larger is a
  * protocol violation and is dropped silently; the caller can notice via
  * [droppedFrames].
+ *
+ * **Embedded-frame recovery.** When the guest TTY briefly opens in cooked
+ * mode (the few-microsecond window between `open(/dev/ttyS1)` and
+ * `tcsetattr` setting raw mode), the kernel echoes inbound bytes back to
+ * us with `ECHOCTL` substitution: every `0x00` delimiter is rewritten as
+ * the literal pair `0x5e 0x40` (`^@`), every `0x02` as `0x5e 0x42`, etc.
+ * The host then sees one giant chunk of echo trash with no real `0x00`s
+ * inside it, finally terminated by the guest's first real outbound frame
+ * (whose own trailing `0x00` is the first delimiter we actually see). A
+ * straight COBS decode of `[trash]+[real frame]` fails, taking the real
+ * frame down with it.
+ *
+ * If [recoveryValidator] is non-null, after a normal COBS decode failure
+ * the framer scans forward through the failed bytes attempting to decode
+ * each `[k..end]` suffix; the first suffix that decodes AND passes the
+ * validator is emitted instead of being dropped. The trash bytes never
+ * pass the validator (they're caret-encoded literals, not valid COBS),
+ * so the scan slides off them and lands on the real frame. Cost is
+ * O(failed-frame-size²), but only fires on already-broken frames; happy
+ * path is untouched.
  */
-class FrameStream(private val maxFrameBytes: Int) {
+class FrameStream @JvmOverloads constructor(
+    private val maxFrameBytes: Int,
+    private val recoveryValidator: ((plain: ByteArray, len: Int) -> Boolean)? = null,
+) {
     private val acc = ByteArray(maxFrameBytes)
     private var accLen = 0
+    private val recoveryScratch = ByteArray(maxFrameBytes)
 
     @get:JvmName("droppedFrames")
     var droppedFrames: Long = 0L
+        private set
+
+    @get:JvmName("recoveredFrames")
+    var recoveredFrames: Long = 0L
         private set
 
     /**
@@ -72,7 +100,16 @@ class FrameStream(private val maxFrameBytes: Int) {
                 val plain = ByteArray(encodedLen)    // decoded ≤ encoded
                 val n = Cobs.decode(acc, 0, encodedLen, plain, 0)
                 if (n < 0) {
-                    droppedFrames++
+                    val recoveredLen = tryRecover(encodedLen)
+                    if (recoveredLen < 0) {
+                        droppedFrames++
+                    } else {
+                        recoveredFrames++
+                        val recovered = ByteArray(recoveredLen)
+                        System.arraycopy(recoveryScratch, 0, recovered, 0, recoveredLen)
+                        val list = out ?: ArrayList<ByteArray>(2).also { out = it }
+                        list.add(recovered)
+                    }
                 } else {
                     val trimmed = if (n == plain.size) plain else plain.copyOf(n)
                     val list = out ?: ArrayList<ByteArray>(2).also { out = it }
@@ -84,5 +121,23 @@ class FrameStream(private val maxFrameBytes: Int) {
             i = zero + 1
         }
         return out ?: emptyList()
+    }
+
+    /**
+     * After a regular COBS decode failure on `acc[0..encodedLen]`, walk
+     * forward looking for the first offset whose suffix both COBS-decodes
+     * and passes [recoveryValidator]. Returns the decoded length on
+     * success (decoded bytes live in [recoveryScratch]), or -1 if no
+     * valid sub-frame is found or recovery is disabled.
+     */
+    private fun tryRecover(encodedLen: Int): Int {
+        val validator = recoveryValidator ?: return -1
+        var k = 1
+        while (k < encodedLen) {
+            val n = Cobs.decode(acc, k, encodedLen - k, recoveryScratch, 0)
+            if (n > 0 && validator(recoveryScratch, n)) return n
+            k++
+        }
+        return -1
     }
 }

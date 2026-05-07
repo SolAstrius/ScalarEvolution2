@@ -72,7 +72,7 @@ class ScevRpcManager private constructor(
     private val machineUuid: UUID,
     private val serial: SerialDevice,
 ) {
-    private val stream = FrameStream(MAX_FRAME_BYTES)
+    private val stream = FrameStream(MAX_FRAME_BYTES, ::looksLikeRpcFrame)
     private val _dispatcher = RpcDispatcher()
 
     /**
@@ -362,6 +362,24 @@ class ScevRpcManager private constructor(
                 machineUuid, fed, out.size,
             )
         }
+    }
+
+    /**
+     * Validator passed to [FrameStream] for embedded-frame recovery.
+     * Returns true when [b] looks like the start of a real RPC frame —
+     * a msgpack `fixarray` (3 or 4 elements) whose first element is one
+     * of the protocol tag bytes. Trash from cooked-mode TTY echo never
+     * matches: caret-encoded literals don't COBS-decode to msgpack
+     * arrays starting with a tag byte at any offset.
+     */
+    private fun looksLikeRpcFrame(b: ByteArray, len: Int): Boolean {
+        if (len < 2) return false
+        // 0x93 = fixarray-3 (event), 0x94 = fixarray-4 (request/response).
+        val hdr = b[0].toInt() and 0xff
+        if (hdr != 0x93 && hdr != 0x94) return false
+        // First element must be positive fixint 0/1/2 — the protocol tag.
+        val tag = b[1].toInt() and 0xff
+        return tag == RpcFrame.TAG_REQ || tag == RpcFrame.TAG_RSP || tag == RpcFrame.TAG_EVT
     }
 
     /* ---------------- companion (static) ---------------- */

@@ -86,6 +86,64 @@ final class FrameStreamTest {
         assertEquals(1, frames.size());
     }
 
+    @Test void recoversValidFrameAfterCookedModeEchoTrash() {
+        // Simulates the guest TTY's brief cooked-mode window on open:
+        // the host's outbound bytes get echoed back to it with ECHOCTL
+        // substitution (every 0x00 → "^@" = 0x5e 0x40, every 0x02 →
+        // "^B" = 0x5e 0x42, …). The original 0x00 frame delimiters
+        // disappear, so the host accumulates [echo-trash]+[real frame]
+        // as one COBS block before seeing the first real 0x00. Without
+        // recovery the whole thing would be dropped, taking the real
+        // frame with it.
+        byte[] trash = new byte[] {
+            // Caret-encoded representation of ^Y (^@ ^B …): just bytes
+            // that don't contain a 0x00 and don't COBS-decode cleanly
+            // when prefixed onto a real frame.
+            0x5e, 0x59, (byte) 0x93, 0x5e, 0x42, (byte) 0xaa,
+            'p','e','r','i','p','h','e','r','a','l',
+            0x5e, 0x40, 0x5e, 0x58,
+        };
+        // Real RPC frame: msgpack array(4) [TAG_REQ=0, id=1, "ping", []]
+        byte[] real = new byte[] {
+            (byte) 0x94, 0x00, 0x01, (byte) 0xa4, 'p','i','n','g', (byte) 0x90,
+        };
+        byte[] realCobs = cobs(real);
+
+        // Wire: trash bytes (no 0x00s) immediately followed by real
+        // COBS frame ending in its own 0x00 delimiter.
+        byte[] wire = new byte[trash.length + realCobs.length];
+        System.arraycopy(trash, 0, wire, 0, trash.length);
+        System.arraycopy(realCobs, 0, wire, trash.length, realCobs.length);
+
+        FrameStream s = new FrameStream(1024, (plain, len) -> {
+            if (len < 2) return false;
+            int hdr = plain[0] & 0xff;
+            if (hdr != 0x93 && hdr != 0x94) return false;
+            int tag = plain[1] & 0xff;
+            return tag <= 2;
+        });
+        List<byte[]> frames = s.feed(wire, 0, wire.length);
+        assertEquals(1, frames.size(), "real frame should be recovered from inside trash");
+        assertArrayEquals(real, frames.get(0));
+        assertEquals(1L, s.recoveredFrames());
+    }
+
+    @Test void recoveryDisabledByDefaultStillDrops() {
+        // Same shape as above, but no validator → original behavior:
+        // failed COBS decode is dropped, frame lost.
+        byte[] trash = new byte[] { 0x5e, 0x59, (byte) 0x93, 0x5e, 0x42 };
+        byte[] real = new byte[] { (byte) 0x94, 0x00, 0x01, (byte) 0xa4, 'p','i','n','g', (byte) 0x90 };
+        byte[] realCobs = cobs(real);
+        byte[] wire = new byte[trash.length + realCobs.length];
+        System.arraycopy(trash, 0, wire, 0, trash.length);
+        System.arraycopy(realCobs, 0, wire, trash.length, realCobs.length);
+
+        FrameStream s = new FrameStream(1024);
+        List<byte[]> frames = s.feed(wire, 0, wire.length);
+        assertEquals(0, frames.size());
+        assertTrue(s.droppedFrames() >= 1);
+    }
+
     private static byte[] cobs(byte[] plain) {
         byte[] out = new byte[Cobs.maxEncodedSize(plain.length)];
         int n = Cobs.encode(plain, 0, plain.length, out, 0);
