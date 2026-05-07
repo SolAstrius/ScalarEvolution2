@@ -44,6 +44,15 @@ object RpcProtocol {
     const val METHOD_READ_CHUNK    = "read_chunk"
     const val METHOD_DISCARD_CHUNK = "discard_chunk"
 
+    /**
+     * Ordered batch — runs a sequence of `(method, args)` pairs as
+     * one logical request. Items dispatch sequentially in input order
+     * (no parallelism); results come back in the same order. See
+     * `ScevRpcHandlers.batch` for the response envelope shape and
+     * the optional `stop_on_error` knob.
+     */
+    const val METHOD_BATCH         = "batch"
+
     // Error-info map keys. Kept private — callers should construct
     // [RpcFrame.ErrorInfo] directly and let encode/decode handle the
     // wire shape.

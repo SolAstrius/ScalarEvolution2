@@ -51,4 +51,10 @@ object RpcErrors {
      *  should retry with a narrower request (filtered describe, paged
      *  list, …) or wait for chunked transfer support. */
     const val FRAME_TOO_LARGE = "frame_too_large"
+
+    /** A `batch` item didn't run because an earlier item errored and
+     *  `stop_on_error` was set. The skipped item's slot in the result
+     *  array carries this code so the guest can tell skipped items
+     *  apart from real failures. */
+    const val SKIPPED = "skipped"
 }

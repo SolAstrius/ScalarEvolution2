@@ -34,6 +34,43 @@ import java.util.UUID
 object ScevRpcHandlers {
     private val LOG = LogUtils.getLogger()
 
+    /**
+     * Protocol-version advertised via [RpcProtocol.METHOD_SELF].
+     * Bumped whenever the wire format changes in a way older guests
+     * would mis-decode. v1 covers structured `{code, message}` errors
+     * + TAG_CHUNKED chunked-transfer; pre-v1 hosts spoke bare-string
+     * errors and capped at 8 KiB frames.
+     */
+    const val PROTOCOL_VERSION: Long = 1
+
+    /**
+     * Capability flags returned in `self.capabilities`. Each entry is
+     * a flag the guest can branch on without inferring it from
+     * [PROTOCOL_VERSION] — minor additions inside a major version
+     * stay forward-compatible because guests query by name.
+     */
+    private fun capabilitiesMap(): Map<MsgValue, MsgValue> = linkedMapOf(
+        MsgValue.of("structured_errors") to MsgValue.of(true),
+        MsgValue.of("chunked_transfer") to MsgValue.of(true),
+        MsgValue.of("frame_too_large_signal") to MsgValue.of(true),
+        MsgValue.of("cooked_mode_recovery") to MsgValue.of(true),
+    )
+
+    /** Wire-level numbers the guest needs to budget its own traffic. */
+    private fun limitsMap(): Map<MsgValue, MsgValue> = linkedMapOf(
+        // Max plaintext (pre-COBS) MessagePack payload either side
+        // will accept; bigger Responses get chunked, bigger Events /
+        // Requests are dropped at the wire boundary.
+        MsgValue.of("frame_max_bytes") to MsgValue.of(ScevRpcManager.MAX_FRAME_BYTES.toLong()),
+        // Per-stream and aggregate caps on the chunk store. Once
+        // breached the host emits FRAME_TOO_LARGE in place of the
+        // chunked marker so the guest knows pagination is needed.
+        MsgValue.of("chunk_max_streams") to MsgValue.of(ChunkStore.DEFAULT_MAX_STREAMS.toLong()),
+        MsgValue.of("chunk_max_stream_bytes") to MsgValue.of(ChunkStore.DEFAULT_MAX_STREAM_BYTES.toLong()),
+        MsgValue.of("chunk_max_total_bytes") to MsgValue.of(ChunkStore.DEFAULT_MAX_TOTAL_BYTES),
+        MsgValue.of("chunk_ttl_ms") to MsgValue.of(ChunkStore.DEFAULT_TTL_MS),
+    )
+
     @JvmStatic
     fun registerDefaults(d: RpcDispatcher, machineUuid: UUID, chunkStore: ChunkStore) {
         d.register(RpcProtocol.METHOD_PING) { _ -> MsgValue.of("pong") }
@@ -49,6 +86,15 @@ object ScevRpcHandlers {
         }
         d.register(RpcProtocol.METHOD_DISCARD_CHUNK) { args ->
             discardChunk(chunkStore, args)
+        }
+
+        // Ordered batch dispatch — runs items sequentially, results
+        // come back in input order with per-item err/result pairs.
+        // Re-uses the same dispatcher to dispatch each item, so any
+        // method already registered is automatically batchable
+        // without per-handler opt-in.
+        d.register(RpcProtocol.METHOD_BATCH) { args ->
+            batch(d, args)
         }
 
         d.register(RpcProtocol.METHOD_LOG) { args ->
@@ -144,13 +190,16 @@ object ScevRpcHandlers {
         }.getOrNull()
         m[MsgValue.of("cc_version")] = ccVersion?.let { MsgValue.of(it) } ?: MsgValue.NIL
 
-        // Wire-level limits the guest needs to know to budget its own
-        // request shapes. `frame_max_bytes` is the max plaintext (pre-
-        // COBS) MessagePack payload either side will accept; bigger
-        // responses come back as a FRAME_TOO_LARGE error instead of
-        // landing on the wire. Useful for guests that decide between
-        // paged or unpaged describe queries.
-        m[MsgValue.of("frame_max_bytes")] = MsgValue.of(ScevRpcManager.MAX_FRAME_BYTES.toLong())
+        // Protocol surface advertisement. Bumped on any breaking
+        // change to the wire shape; guests gate compatibility on this.
+        // Capability flags name optional features the host implements
+        // — guests check the flag rather than the version because
+        // forward-compat additions land outside of major bumps.
+        // `limits` carries the wire-level numbers a guest needs to
+        // budget its own requests (frame cap, chunk store sizing).
+        m[MsgValue.of("protocol_version")] = MsgValue.of(PROTOCOL_VERSION)
+        m[MsgValue.of("capabilities")] = MsgValue.ofMap(capabilitiesMap())
+        m[MsgValue.of("limits")] = MsgValue.ofMap(limitsMap())
 
         m[MsgValue.of("facing")] = runCatching {
             val state = MachineManager.getMachineState(machineUuid)
@@ -192,6 +241,106 @@ object ScevRpcHandlers {
                 RpcErrors.NO_SUCH_PEER,
             )
         return MsgValue.of(slice)
+    }
+
+    /**
+     * `batch(items: array, opts?: map) -> array`
+     *
+     * Runs `items` (each a `[method, args]` pair, args optional) one
+     * at a time on this same dispatcher. Returns one envelope per
+     * input item in the same order, regardless of which items
+     * succeeded or failed:
+     *
+     *   `[err_or_nil, result_or_nil]`
+     *
+     * where `err` matches the [RpcFrame.Response] error shape:
+     * `nil` on success, `{code, message}` on failure.
+     *
+     * Optional `opts.stop_on_error` (default `false`): when true, the
+     * first errored item halts dispatch — every subsequent slot in
+     * the result array carries `[{code: SKIPPED, …}, nil]` so the
+     * guest can distinguish skipped items from real failures and the
+     * length of the response always matches the input.
+     *
+     * Items dispatch serially in the same coroutine — equivalent to
+     * the guest issuing N separate RPCs back-to-back, but with one
+     * round-trip's worth of framing overhead. Methods that suspend
+     * (yielding peripheral calls, future cancellable handlers) work
+     * naturally because suspension yields the coroutine and the
+     * batch resumes on the next dispatch step.
+     *
+     * Nested `batch` calls are refused with [RpcErrors.UNSUPPORTED];
+     * a guest that wants nested-style fan-out should issue separate
+     * batches.
+     */
+    @JvmStatic
+    private suspend fun batch(d: RpcDispatcher, args: List<MsgValue>): MsgValue {
+        val items = requireArray(args, 0, "items")
+        val stopOnError: Boolean = if (args.size > 1 && args[1].isMap) {
+            val opts = args[1].asMap()
+            (opts[MsgValue.of("stop_on_error")] as? MsgValue.Bool)?.value ?: false
+        } else {
+            false
+        }
+
+        val out = ArrayList<MsgValue>(items.size)
+        var halted = false
+        for ((idx, item) in items.withIndex()) {
+            if (halted) {
+                out += batchEnvelope(
+                    RpcFrame.ErrorInfo(RpcErrors.SKIPPED, "skipped after earlier item errored"),
+                    MsgValue.NIL,
+                )
+                continue
+            }
+            val pair = (item as? MsgValue.Arr)?.value
+            if (pair == null || pair.isEmpty() || !pair[0].isString) {
+                out += batchEnvelope(
+                    RpcFrame.ErrorInfo(RpcErrors.BAD_ARGS, "items[$idx] must be [method, args]"),
+                    MsgValue.NIL,
+                )
+                if (stopOnError) halted = true
+                continue
+            }
+            val method = pair[0].asString()
+            if (method == RpcProtocol.METHOD_BATCH) {
+                out += batchEnvelope(
+                    RpcFrame.ErrorInfo(RpcErrors.UNSUPPORTED, "nested batch not allowed"),
+                    MsgValue.NIL,
+                )
+                if (stopOnError) halted = true
+                continue
+            }
+            val itemArgs: List<MsgValue> = if (pair.size > 1 && pair[1].isArray) {
+                pair[1].asArray()
+            } else {
+                emptyList()
+            }
+            // Dispatch via the existing dispatcher so we get all the
+            // standard error wrapping (RpcException -> code+message,
+            // RuntimeException -> internal_error, unknown method ->
+            // no_such_method) without re-implementing it here. Id is
+            // a placeholder — the guest never sees it because we
+            // strip the Response envelope down to (err, result).
+            val resp = d.dispatch(RpcFrame.Request(0L, method, itemArgs))
+            out += batchEnvelope(resp.error, resp.result)
+            if (resp.error != null && stopOnError) halted = true
+        }
+        return MsgValue.ofArray(out)
+    }
+
+    private fun batchEnvelope(err: RpcFrame.ErrorInfo?, result: MsgValue): MsgValue {
+        val errSlot: MsgValue = if (err == null) {
+            MsgValue.NIL
+        } else {
+            MsgValue.ofMap(
+                linkedMapOf(
+                    MsgValue.of("code") to MsgValue.of(err.code),
+                    MsgValue.of("message") to MsgValue.of(err.message),
+                )
+            )
+        }
+        return MsgValue.ofArray(listOf(errSlot, result))
     }
 
     /**
