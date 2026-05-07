@@ -6,6 +6,7 @@
 package lekkit.scev.rpc
 
 import lekkit.scev.core.rpc.MsgValue
+import lekkit.scev.core.rpc.RpcErrors
 
 /**
  * Typed view over a decoded RPC frame. Every wire frame is a MessagePack
@@ -16,6 +17,11 @@ import lekkit.scev.core.rpc.MsgValue
  *   [1, id, err_or_nil, result]   - response
  *   [2, name, args]               - event
  * ```
+ *
+ * `err_or_nil` is `nil` on success, or a map `{code: str, message: str}`
+ * on error. (For backward-decoding tolerance, a bare string is also
+ * accepted by [RpcProtocol.decode] and lifted to `{code: GENERIC,
+ * message: <str>}` — but the host always emits the map form.)
  *
  * IDs are unsigned 32-bit; we carry them as `Long` to dodge sign confusion
  * on the JVM side. They're guest-chosen, guest-unique within a session;
@@ -33,9 +39,19 @@ sealed interface RpcFrame {
         @get:JvmName("args") val args: List<MsgValue>,
     ) : RpcFrame
 
+    /**
+     * Structured error payload carried in a [Response.error] slot.
+     * `code` is one of [RpcErrors]; `message` is human-readable, never
+     * null. Guests branch on `code` and display `message` to the user.
+     */
+    data class ErrorInfo(
+        @get:JvmName("code") val code: String,
+        @get:JvmName("message") val message: String,
+    )
+
     data class Response(
         @get:JvmName("id") val id: Long,
-        @get:JvmName("error") val error: String?,
+        @get:JvmName("error") val error: ErrorInfo?,
         @get:JvmName("result") val result: MsgValue,
     ) : RpcFrame
 
@@ -53,9 +69,16 @@ sealed interface RpcFrame {
         fun ok(id: Long, result: MsgValue?): Response =
             Response(id, null, result ?: MsgValue.NIL)
 
+        /** Build an error response with an explicit code. */
+        @JvmStatic
+        fun error(id: Long, code: String, message: String): Response =
+            Response(id, ErrorInfo(code, message), MsgValue.NIL)
+
+        /** Convenience: error with [RpcErrors.GENERIC] code. Prefer the
+         *  three-arg form when a more specific code applies. */
         @JvmStatic
         fun error(id: Long, message: String): Response =
-            Response(id, message, MsgValue.NIL)
+            error(id, RpcErrors.GENERIC, message)
 
         @JvmStatic
         fun event(name: String, args: List<MsgValue>?): Event =

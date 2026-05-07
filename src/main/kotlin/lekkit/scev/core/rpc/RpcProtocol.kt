@@ -37,6 +37,12 @@ object RpcProtocol {
     const val METHOD_TRACE       = "trace"
     const val METHOD_SELF        = "self"
 
+    // Error-info map keys. Kept private — callers should construct
+    // [RpcFrame.ErrorInfo] directly and let encode/decode handle the
+    // wire shape.
+    private val KEY_CODE = MsgValue.of("code")
+    private val KEY_MESSAGE = MsgValue.of("message")
+
     /** Encode a frame to its MessagePack byte representation. */
     @JvmStatic
     fun encode(f: RpcFrame): ByteArray {
@@ -51,7 +57,7 @@ object RpcProtocol {
             is RpcFrame.Response -> {
                 arr += MsgValue.of(RpcFrame.TAG_RSP.toLong())
                 arr += MsgValue.of(f.id)
-                arr += f.error?.let { MsgValue.of(it) } ?: MsgValue.NIL
+                arr += encodeError(f.error)
                 arr += f.result
             }
             is RpcFrame.Event -> {
@@ -61,6 +67,14 @@ object RpcProtocol {
             }
         }
         return MsgPack.encode(MsgValue.ofArray(arr))
+    }
+
+    private fun encodeError(e: RpcFrame.ErrorInfo?): MsgValue {
+        if (e == null) return MsgValue.NIL
+        val m = LinkedHashMap<MsgValue, MsgValue>(2)
+        m[KEY_CODE] = MsgValue.of(e.code)
+        m[KEY_MESSAGE] = MsgValue.of(e.message)
+        return MsgValue.ofMap(m)
     }
 
     /**
@@ -93,12 +107,34 @@ object RpcProtocol {
     private fun decodeResponse(arr: List<MsgValue>): RpcFrame? {
         if (arr.size != 4) return null
         val id = (arr[1] as? MsgValue.Int)?.value ?: return null
-        val error = when (val e = arr[2]) {
-            is MsgValue.Nil -> null
-            is MsgValue.Str -> e.value
-            else -> return null
+        val error = decodeError(arr[2]) ?: return null
+        return RpcFrame.Response(id, error.orNull(), arr[3])
+    }
+
+    /**
+     * Decode the error slot. Accepts:
+     *  - `nil`                              → success (no error)
+     *  - `{code, message}` map              → structured error
+     *  - bare string (legacy)               → wrap as [RpcErrors.GENERIC]
+     *
+     * Returns a wrapping [DecodedError] so the caller can distinguish
+     * "successfully decoded as no-error" from "malformed slot". `null`
+     * return means the slot wasn't a recognised shape.
+     */
+    private fun decodeError(slot: MsgValue): DecodedError? = when (slot) {
+        is MsgValue.Nil -> DecodedError(null)
+        is MsgValue.Str -> DecodedError(RpcFrame.ErrorInfo(RpcErrors.GENERIC, slot.value))
+        is MsgValue.Map -> {
+            val m = slot.value
+            val code = (m[KEY_CODE] as? MsgValue.Str)?.value ?: RpcErrors.GENERIC
+            val msg = (m[KEY_MESSAGE] as? MsgValue.Str)?.value ?: ""
+            DecodedError(RpcFrame.ErrorInfo(code, msg))
         }
-        return RpcFrame.Response(id, error, arr[3])
+        else -> null
+    }
+
+    private class DecodedError(private val info: RpcFrame.ErrorInfo?) {
+        fun orNull(): RpcFrame.ErrorInfo? = info
     }
 
     private fun decodeEvent(arr: List<MsgValue>): RpcFrame? {

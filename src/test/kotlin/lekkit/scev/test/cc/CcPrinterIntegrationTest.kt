@@ -309,8 +309,8 @@ class CcPrinterIntegrationTest {
         // "Page not started" is PrinterPeripheral's thrown LuaException
         // message. The enrichment pipeline in ScevPeripheralMethods
         // appends the signature — we assert it's there.
-        assertTrue(err.contains("Page not started"), err)
-        assertTrue(err.contains("endPage"), err)
+        assertTrue(err.message.contains("Page not started"), err.message)
+        assertTrue(err.message.contains("endPage"), err.message)
     }
 
     // -------- Framing helpers --------

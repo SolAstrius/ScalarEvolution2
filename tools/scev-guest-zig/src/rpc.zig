@@ -156,7 +156,9 @@ pub const Client = struct {
                 continue;
             }
 
-            // err field: nil means success, string means error.
+            // err field: nil = success, map = structured error
+            // {code, message}, string = legacy error (treat as code
+            // "rpc_error"). The map form is what current hosts emit.
             const err_kind = dec.peek() catch return Error.ProtocolError;
             if (err_kind == .nil) {
                 try dec.readNil();
@@ -164,6 +166,8 @@ pub const Client = struct {
                 return .{
                     .is_error = false,
                     .bytes = payload[body_start..],
+                    .error_code = "",
+                    .error_message = "",
                 };
             }
             if (err_kind == .str) {
@@ -171,6 +175,33 @@ pub const Client = struct {
                 return .{
                     .is_error = true,
                     .bytes = err_str,
+                    .error_code = "rpc_error",
+                    .error_message = err_str,
+                };
+            }
+            if (err_kind == .map) {
+                var code: []const u8 = "rpc_error";
+                var message: []const u8 = "";
+                const n = try dec.readMapHeader();
+                var i: u32 = 0;
+                while (i < n) : (i += 1) {
+                    const key = dec.readStr() catch {
+                        dec.skip() catch {};
+                        continue;
+                    };
+                    if (std.mem.eql(u8, key, "code")) {
+                        code = dec.readStr() catch "rpc_error";
+                    } else if (std.mem.eql(u8, key, "message")) {
+                        message = dec.readStr() catch "";
+                    } else {
+                        dec.skip() catch {};
+                    }
+                }
+                return .{
+                    .is_error = true,
+                    .bytes = message,
+                    .error_code = code,
+                    .error_message = message,
                 };
             }
             return Error.ProtocolError;
@@ -240,10 +271,17 @@ pub const Client = struct {
 
 pub const Response = struct {
     is_error: bool,
-    /// When `is_error == false`: the raw msgpack bytes of the result
-    /// value — caller runs a Decoder over them.
-    /// When `is_error == true`: the error message bytes (UTF-8).
+    /// On success: raw msgpack bytes of the result value — caller
+    /// runs a Decoder over them.
+    /// On error: same UTF-8 bytes as `error_message`, kept here for
+    /// back-compat with call sites that already log `resp.bytes`.
     bytes: []const u8,
+    /// Stable error code (e.g. "no_such_peer", "bad_args"). Empty on
+    /// success. Unknown codes from a newer host should be displayed
+    /// to the user but treated as "rpc_error" for branching purposes.
+    error_code: []const u8,
+    /// Human-readable error message, UTF-8. Empty on success.
+    error_message: []const u8,
 };
 
 /// Put the fd in raw 115200 8N1 mode — matches the scev NS16550A

@@ -12,6 +12,7 @@ import java.util.UUID;
 import lekkit.scev.rpc.Cobs;
 import lekkit.scev.rpc.FrameStream;
 import lekkit.scev.core.rpc.MsgValue;
+import lekkit.scev.core.rpc.RpcErrors;
 import lekkit.scev.rpc.RpcFrame;
 import lekkit.scev.core.rpc.RpcProtocol;
 import lekkit.scev.rpc.ScevRpcManager;
@@ -48,7 +49,7 @@ final class ScevRpcManagerTest {
         assertTrue(decoded instanceof RpcFrame.Response, "expected a Response, got " + decoded);
         RpcFrame.Response rsp = (RpcFrame.Response) decoded;
         assertEquals(1, rsp.id());
-        assertNull(rsp.error());
+        assertNull(rsp.error(), "ping should be error-free");
         assertEquals("pong", rsp.result().asString());
 
         assertEquals(1, mgr.requestsIn());
@@ -66,7 +67,8 @@ final class ScevRpcManagerTest {
         RpcFrame.Response rsp = (RpcFrame.Response) decodeFirst(serial.consumeRx());
         assertEquals(7, rsp.id());
         assertNotNull(rsp.error());
-        assertTrue(rsp.error().contains("unknown"));
+        assertEquals(RpcErrors.NO_SUCH_METHOD, rsp.error().code());
+        assertTrue(rsp.error().message().contains("unknown"));
     }
 
     @Test void listReturnsEmptyArrayWhenNoAdjacentPeripherals() {

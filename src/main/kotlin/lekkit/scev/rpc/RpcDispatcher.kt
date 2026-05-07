@@ -6,6 +6,7 @@
 package lekkit.scev.rpc
 
 import lekkit.scev.core.rpc.MsgValue
+import lekkit.scev.core.rpc.RpcErrors
 import lekkit.scev.core.rpc.RpcHandler
 import lekkit.scev.core.rpc.RpcProtocol
 
@@ -50,7 +51,7 @@ class RpcDispatcher {
     @Throws(CancellationException::class)
     suspend fun dispatch(req: RpcFrame.Request): RpcFrame.Response {
         val handler = handlers[req.method]
-            ?: return RpcFrame.error(req.id, "unknown method: ${req.method}")
+            ?: return RpcFrame.error(req.id, RpcErrors.NO_SUCH_METHOD, "unknown method: ${req.method}")
         val args: List<MsgValue> = req.args ?: emptyList()
         return try {
             val result = handler.invoke(args)
@@ -58,10 +59,10 @@ class RpcDispatcher {
         } catch (e: CancellationException) {
             throw e
         } catch (e: RpcHandler.RpcException) {
-            RpcFrame.error(req.id, e.message ?: "rpc error")
+            RpcFrame.error(req.id, e.code, e.message ?: "rpc error")
         } catch (e: RuntimeException) {
             LOG.warn("RPC handler {} threw", req.method, e)
-            RpcFrame.error(req.id, "internal error")
+            RpcFrame.error(req.id, RpcErrors.INTERNAL_ERROR, "internal error")
         }
     }
 

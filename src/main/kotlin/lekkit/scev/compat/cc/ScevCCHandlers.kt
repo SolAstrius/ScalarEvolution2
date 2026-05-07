@@ -12,6 +12,7 @@ import dan200.computercraft.api.peripheral.IPeripheral
 import kotlinx.coroutines.sync.withLock
 import lekkit.scev.core.rpc.MsgValue
 import lekkit.scev.rpc.RpcDispatcher
+import lekkit.scev.core.rpc.RpcErrors
 import lekkit.scev.core.rpc.RpcHandler
 import lekkit.scev.core.rpc.RpcProtocol
 import java.lang.reflect.Field
@@ -148,7 +149,7 @@ internal object ScevCCHandlers {
     private suspend fun methods(computer: ScevCCComputer, args: List<MsgValue>): MsgValue {
         val target = requireString(args, 0, "peer")
         val ref = computer.resolvePeripheral(target)
-            ?: throw RpcHandler.RpcException("no such peripheral: $target")
+            ?: throw RpcHandler.RpcException("no such peripheral: $target", RpcErrors.NO_SUCH_PEER)
         return when (ref) {
             is ScevCCComputer.PeripheralRef.Direct ->
                 MsgValue.ofArray(ScevPeripheralMethods.methodNames(ref.peripheral).map { MsgValue.of(it) })
@@ -162,7 +163,7 @@ internal object ScevCCHandlers {
                         ref.modem, computer, ctx, "getMethodsRemote", arguments,
                     )
                 } catch (e: LuaException) {
-                    throw RpcHandler.RpcException(e.message ?: "Lua error")
+                    throw RpcHandler.RpcException(e.message ?: "Lua error", RpcErrors.LUA_ERROR)
                 }
                 // Unwrap: result.result is Object[]; first element is
                 // the actual method-name collection.
@@ -189,7 +190,7 @@ internal object ScevCCHandlers {
             if (args.size > 2) args.subList(2, args.size) else emptyList()
 
         val ref = computer.resolvePeripheral(target)
-            ?: throw RpcHandler.RpcException("no such peripheral: $target")
+            ?: throw RpcHandler.RpcException("no such peripheral: $target", RpcErrors.NO_SUCH_PEER)
 
         val ctx = ScevLuaContext(computer)
         val javaArgs = callArgs.map { LuaValueConverter.toLua(it) }.toTypedArray()
@@ -259,7 +260,7 @@ internal object ScevCCHandlers {
                     detail = e.message,
                 ),
             )
-            throw RpcHandler.RpcException(e.message ?: "Lua error")
+            throw RpcHandler.RpcException(e.message ?: "Lua error", RpcErrors.LUA_ERROR)
         } catch (e: RuntimeException) {
             val durationUs = (System.nanoTime() - startNanos) / 1000
             computer.recordTrace(
@@ -273,7 +274,7 @@ internal object ScevCCHandlers {
                     detail = e.message,
                 ),
             )
-            throw RpcHandler.RpcException("$method: ${e.message}")
+            throw RpcHandler.RpcException("$method: ${e.message}", RpcErrors.RUNTIME_ERROR)
         }
 
         val values = result.result ?: return MsgValue.NIL
@@ -289,7 +290,10 @@ internal object ScevCCHandlers {
     @Throws(RpcHandler.RpcException::class)
     private fun queueEvent(computer: ScevCCComputer, args: List<MsgValue>): MsgValue {
         if (args.isEmpty() || !args[0].isString) {
-            throw RpcHandler.RpcException("queue_event: first arg must be the event name")
+            throw RpcHandler.RpcException(
+                "queue_event: first arg must be the event name",
+                RpcErrors.BAD_ARGS,
+            )
         }
         val name = args[0].asString()
         val rest = if (args.size > 1) args.subList(1, args.size) else emptyList()
@@ -330,7 +334,7 @@ internal object ScevCCHandlers {
     private suspend fun describe(computer: ScevCCComputer, args: List<MsgValue>): MsgValue {
         val target = requireString(args, 0, "peer")
         val ref = computer.resolvePeripheral(target)
-            ?: throw RpcHandler.RpcException("no such peripheral: $target")
+            ?: throw RpcHandler.RpcException("no such peripheral: $target", RpcErrors.NO_SUCH_PEER)
         return when (ref) {
             is ScevCCComputer.PeripheralRef.Direct -> describeDirect(target, ref.peripheral, args)
             is ScevCCComputer.PeripheralRef.Remote -> describeRemote(computer, ref, args)
@@ -400,7 +404,10 @@ internal object ScevCCHandlers {
                 base[MsgValue.of("method")] = MsgValue.ofMap(stub)
                 return MsgValue.ofMap(base)
             }
-            throw RpcHandler.RpcException("no such method on $name: $methodFilter")
+            throw RpcHandler.RpcException(
+                "no such method on $name: $methodFilter",
+                RpcErrors.NO_SUCH_METHOD,
+            )
         }
 
         // Group by declaredBy — TreeMap for stable output, inner list sorted by name.
@@ -460,7 +467,7 @@ internal object ScevCCHandlers {
                 ref.modem, computer, ctx, "getMethodsRemote", arguments,
             )
         } catch (e: LuaException) {
-            throw RpcHandler.RpcException(e.message ?: "Lua error")
+            throw RpcHandler.RpcException(e.message ?: "Lua error", RpcErrors.LUA_ERROR)
         }
         val values = result.result ?: arrayOf()
         val inner = values.firstOrNull()
@@ -815,7 +822,7 @@ internal object ScevCCHandlers {
     private suspend fun type(computer: ScevCCComputer, args: List<MsgValue>): MsgValue {
         val target = requireString(args, 0, "peer")
         val ref = computer.resolvePeripheral(target)
-            ?: throw RpcHandler.RpcException("no such peripheral: $target")
+            ?: throw RpcHandler.RpcException("no such peripheral: $target", RpcErrors.NO_SUCH_PEER)
         val out = linkedMapOf<MsgValue, MsgValue>()
         out[MsgValue.of("peer")] = MsgValue.of(target)
         when (ref) {
@@ -835,7 +842,7 @@ internal object ScevCCHandlers {
                         ref.modem, computer, ctx, "getTypeRemote", arguments,
                     )
                 } catch (e: LuaException) {
-                    throw RpcHandler.RpcException(e.message ?: "Lua error")
+                    throw RpcHandler.RpcException(e.message ?: "Lua error", RpcErrors.LUA_ERROR)
                 }
                 val values = result.result ?: arrayOf()
                 val types = values.filterIsInstance<String>()
@@ -890,7 +897,10 @@ internal object ScevCCHandlers {
                 }
                 MsgValue.ofArray(entries)
             }
-            else -> throw RpcHandler.RpcException("trace: unknown subcommand '$sub' (on|off|status|dump|clear)")
+            else -> throw RpcHandler.RpcException(
+                "trace: unknown subcommand '$sub' (on|off|status|dump|clear)",
+                RpcErrors.BAD_ARGS,
+            )
         }
     }
 
@@ -899,7 +909,7 @@ internal object ScevCCHandlers {
     @Throws(RpcHandler.RpcException::class)
     private fun requireString(args: List<MsgValue>, idx: Int, name: String): String {
         if (args.size <= idx || !args[idx].isString) {
-            throw RpcHandler.RpcException("expected string argument: $name")
+            throw RpcHandler.RpcException("expected string argument: $name", RpcErrors.BAD_ARGS)
         }
         return args[idx].asString()
     }

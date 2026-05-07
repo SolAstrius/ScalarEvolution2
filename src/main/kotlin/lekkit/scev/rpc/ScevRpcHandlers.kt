@@ -6,6 +6,7 @@
 package lekkit.scev.rpc
 
 import lekkit.scev.core.rpc.MsgValue
+import lekkit.scev.core.rpc.RpcErrors
 import lekkit.scev.core.rpc.RpcHandler
 import lekkit.scev.core.rpc.RpcProtocol
 
@@ -68,7 +69,10 @@ object ScevRpcHandlers {
         // CC: Tweaked is loaded. Without CC, the guest sees a clean
         // error instead of "unknown method".
         val notInstalled = RpcHandler { _ ->
-            throw RpcHandler.RpcException("CC: Tweaked is not installed on this server")
+            throw RpcHandler.RpcException(
+                "CC: Tweaked is not installed on this server",
+                RpcErrors.NOT_INSTALLED,
+            )
         }
         d.register(RpcProtocol.METHOD_LIST, notInstalled)
         d.register(RpcProtocol.METHOD_METHODS, notInstalled)
@@ -147,7 +151,7 @@ object ScevRpcHandlers {
     @Throws(RpcHandler.RpcException::class)
     fun requireString(args: List<MsgValue>, idx: Int, name: String): String {
         if (args.size <= idx || !args[idx].isString) {
-            throw RpcHandler.RpcException("expected string argument: $name")
+            throw RpcHandler.RpcException("expected string argument: $name", RpcErrors.BAD_ARGS)
         }
         return args[idx].asString()
     }
@@ -157,7 +161,7 @@ object ScevRpcHandlers {
     @Throws(RpcHandler.RpcException::class)
     fun requireArray(args: List<MsgValue>, idx: Int, name: String): List<MsgValue> {
         if (args.size <= idx || !args[idx].isArray) {
-            throw RpcHandler.RpcException("expected array argument: $name")
+            throw RpcHandler.RpcException("expected array argument: $name", RpcErrors.BAD_ARGS)
         }
         return args[idx].asArray()
     }

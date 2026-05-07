@@ -18,17 +18,35 @@ package lekkit.scev.core.rpc
  * the continuation back to the server thread for the response write.
  *
  * Handlers should NOT throw for expected-failure cases — throw
- * [RpcException] with a message the guest can display. Any other
- * exception is caught by the dispatcher and turned into a generic
- * "internal error" response (full trace logged server-side only).
+ * [RpcException] with a [RpcErrors] code and a message the guest can
+ * display. Any other exception is caught by the dispatcher and turned
+ * into a generic [RpcErrors.INTERNAL_ERROR] response (full trace
+ * logged server-side only).
  */
 fun interface RpcHandler {
     @Throws(RpcHandler.RpcException::class)
     suspend operator fun invoke(args: List<MsgValue>): MsgValue
 
-    /** Signals a controlled failure whose message should reach the guest. */
+    /**
+     * Signals a controlled failure whose code + message should reach
+     * the guest. Default code is [RpcErrors.GENERIC]; pass a more
+     * specific code from [RpcErrors] when one applies.
+     */
     class RpcException : Exception {
-        constructor(message: String) : super(message)
-        constructor(message: String, cause: Throwable) : super(message, cause)
+        @get:JvmName("code") val code: String
+
+        @JvmOverloads
+        constructor(message: String, code: String = RpcErrors.GENERIC) : super(message) {
+            this.code = code
+        }
+
+        @JvmOverloads
+        constructor(
+            message: String,
+            cause: Throwable,
+            code: String = RpcErrors.GENERIC,
+        ) : super(message, cause) {
+            this.code = code
+        }
     }
 }
