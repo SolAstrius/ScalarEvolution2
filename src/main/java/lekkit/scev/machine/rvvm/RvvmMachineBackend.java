@@ -313,6 +313,12 @@ public final class RvvmMachineBackend implements MachineBackend {
         // -- NIC ------------------------------------------------------------
         if (spec.hasNic()) {
             nic = new RTL8169(m);
+            // Bind a loopback host port that forwards to the guest's TCP/22
+            // for developer SSH access. Per-UUID hashed slot so reconnects
+            // land on the same port across server restarts. The guest still
+            // has to be running sshd for this to do anything; without it the
+            // forward is harmless (TCP RST from inside the guest network).
+            GuestSshPorts.assign(spec.uuid(), nic);
         }
 
         // -- GPIO -----------------------------------------------------------
@@ -598,6 +604,7 @@ public final class RvvmMachineBackend implements MachineBackend {
         }
         if (spec != null) {
             ScevRpcManager.unregister(spec.uuid());
+            GuestSshPorts.release(spec.uuid());
         }
         nvmeDrives.clear();
         // Clean up any custom-firmware temp files we spilled. Not critical
