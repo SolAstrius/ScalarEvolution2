@@ -295,6 +295,29 @@ dependencies {
     testImplementation 'org.mockito:mockito-core:5.15.2'
     testImplementation 'org.mockito.kotlin:mockito-kotlin:5.4.0'
 
+    // Advanced Peripherals — extra CC peripherals (player detector,
+    // chat box, ME bridge, energy detector, ...). No scev code touches
+    // it; runtimeOnly so runClient gets a richer CC surface for manual
+    // testing of the scev RPC <-> peripheral bridge against a real
+    // third-party peripheral mod. No published API jar, so we pull the
+    // full mod via Modrinth's maven. Botania has no 1.21.1 NeoForge
+    // release on Modrinth (Vazkii hasn't ported past 1.20.1), so it's
+    // intentionally omitted from this stack.
+    runtimeOnly "maven.modrinth:advancedperipherals:${advanced_peripherals_version}"
+
+    // AE2 + Mekanism — pulled in so AP's ME bridge / chemical tank /
+    // energy detector integrations actually have something to bind to
+    // at runtime. Both publish proper NeoForge artifacts to Modrinth's
+    // maven for 1.21.1.
+    runtimeOnly "maven.modrinth:ae2:${ae2_version}"
+    // All four Mekanism subprojects share a single version_number per
+    // release — pulling the full set so AP's gas/chemical/energy
+    // peripherals have the broadest possible runtime surface.
+    runtimeOnly "maven.modrinth:mekanism:${mekanism_version}"
+    runtimeOnly "maven.modrinth:mekanism-generators:${mekanism_version}"
+    runtimeOnly "maven.modrinth:mekanism-tools:${mekanism_version}"
+    runtimeOnly "maven.modrinth:mekanism-additions:${mekanism_version}"
+
     // Create — soft-dep target for cross-mod integration under
     // lekkit.scev.compat.create. Resolved from CreateMod's maven (see
     // the repository{} block above), which ships proper POM + Gradle
