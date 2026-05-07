@@ -38,8 +38,18 @@ object LinuxFirmware : ScevFirmware {
      * `earlycon=sbi` routes the very first kernel messages via SBI before
      * `simple-framebuffer` has attached, so they appear on-screen instead
      * of disappearing into a black frame.
+     *
+     * `8250.nr_uarts=0` disables the static legacy-ISA-probed pool the
+     * 8250 driver allocates at boot (default 4, hence the phantom
+     * `/dev/ttyS2` and `/dev/ttyS3` nodes that came up even though our
+     * FDT only declares two NS16550A bridges). With the static pool at
+     * zero, every ttyS appears strictly because a DT node bound to it
+     * — kernel ports for kernel/RPC come up as ttyS0/ttyS1 in DT order,
+     * and any later expansion (PCI serial card, extra ns16550a bridge)
+     * gets the next free index dynamically. `/dev/ttyS*` then reflects
+     * the actual hardware topology instead of a fixed-size pool.
      */
-    const val CMDLINE = "console=ttyS0,115200 console=tty0 earlycon=sbi"
+    const val CMDLINE = "console=ttyS0,115200 console=tty0 earlycon=sbi 8250.nr_uarts=0"
 
     const val MIN_RAM_MB = 256L
 
