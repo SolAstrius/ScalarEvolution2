@@ -299,6 +299,7 @@ class ScevCCComputer(private val machineUuid: UUID) : IComputerAccess {
         attachedPeripherals.clear()
         sideToPeripheral.clear()
         remoteToModem.clear()
+        claimedMounts.clear()
         rpcManager = null
     }
 
@@ -314,11 +315,38 @@ class ScevCCComputer(private val machineUuid: UUID) : IComputerAccess {
 
     /* ---------------- IComputerAccess ---------------- */
 
-    override fun mount(desiredLocation: String, mount: Mount, driveName: String): String? = null
+    /**
+     * Tracks claimed mount-path names so [mount] / [mountWritable]
+     * honour CC's "return null on collision, caller retries with the
+     * next numbered name" contract. We don't have a Lua filesystem to
+     * actually mount the data into — the guest is Linux — but CC's own
+     * [DiskDriveBlockEntity.mountDisk] is structured as
+     *
+     * ```
+     * while (info.mountPath == null) {
+     *     info.mountPath = computer.mountWritable(...);
+     *     n++;
+     * }
+     * ```
+     *
+     * Returning null forever (the previous behaviour) spins that loop
+     * on the server thread forever the first time a floppy is inserted
+     * into a drive attached to a scev computer, hanging every UI on
+     * the server. Claiming the desired name on first ask, returning
+     * null on collision, lets the loop terminate exactly the way it
+     * would against a real CC computer.
+     */
+    private val claimedMounts: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
 
-    override fun mountWritable(desiredLocation: String, mount: WritableMount, driveName: String): String? = null
+    override fun mount(desiredLocation: String, mount: Mount, driveName: String): String? =
+        if (claimedMounts.add(desiredLocation)) desiredLocation else null
 
-    override fun unmount(location: String?) {}
+    override fun mountWritable(desiredLocation: String, mount: WritableMount, driveName: String): String? =
+        if (claimedMounts.add(desiredLocation)) desiredLocation else null
+
+    override fun unmount(location: String?) {
+        if (location != null) claimedMounts.remove(location)
+    }
 
     /** Stable int id derived from the machine's UUID. */
     override fun getID(): Int = machineUuid.hashCode().ushr(1)  // mask sign bit
