@@ -310,6 +310,11 @@ dependencies {
     // at runtime. Both publish proper NeoForge artifacts to Modrinth's
     // maven for 1.21.1.
     runtimeOnly "maven.modrinth:ae2:${ae2_version}"
+    // GuideME — AE2's in-game guide, extracted to its own mod in 19.x
+    // and declared as a HARD dep in AE2's mods.toml. Without it, FML's
+    // mod sorter rejects ae2 with "Missing or unsupported mandatory
+    // dependencies: guideme [MISSING]" and aborts mod loading.
+    runtimeOnly "maven.modrinth:guideme:${guideme_version}"
     // All four Mekanism subprojects share a single version_number per
     // release — pulling the full set so AP's gas/chemical/energy
     // peripherals have the broadest possible runtime surface.
