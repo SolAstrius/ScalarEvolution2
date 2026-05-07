@@ -339,14 +339,30 @@ class ScevRpcManager private constructor(
         }
     }
 
-    /** Encode, COBS-frame, and push to the guest RX ring. */
+    /** Encode, COBS-frame, and push to the guest RX ring.
+     *
+     *  When a Response is too large to fit, replace it with a
+     *  `frame_too_large` error response of the same id rather than
+     *  silently dropping it — the guest then gets a typed error
+     *  instead of waiting for a reply that's never coming. Events that
+     *  exceed the cap get logged and dropped (no id to correlate with;
+     *  the guest's event-aware code paths are designed to tolerate
+     *  drops anyway). */
     private fun writeFrame(f: RpcFrame) {
         val payload = RpcProtocol.encode(f)
         if (payload.size > MAX_FRAME_BYTES) {
             LOG.warn(
-                "[scev-rpc] {} dropping outbound frame larger than max ({} > {})",
+                "[scev-rpc] {} outbound frame larger than max ({} > {})",
                 machineUuid, payload.size, MAX_FRAME_BYTES,
             )
+            if (f is RpcFrame.Response) {
+                val replacement = RpcFrame.error(
+                    f.id,
+                    lekkit.scev.core.rpc.RpcErrors.FRAME_TOO_LARGE,
+                    "response payload ${payload.size} bytes exceeds frame cap $MAX_FRAME_BYTES",
+                )
+                writeFrame(replacement)
+            }
             return
         }
         val enc = Cobs.encode(payload, 0, payload.size, encodeBuf, 0)
@@ -387,8 +403,21 @@ class ScevRpcManager private constructor(
     companion object {
         private val LOG = LogUtils.getLogger()
 
-        /** Max COBS-encoded frame size the framer will accumulate before resetting. */
-        @JvmField val MAX_FRAME_BYTES: Int = 8192
+        /**
+         * Max plaintext frame size the framer will accumulate before
+         * resetting. AdvancedPeripherals' bigger describe responses
+         * (ME bridge, energy detector) easily clear 16 KB; an entire
+         * AE2 inventory listing returned through `call` can run to
+         * hundreds of KB and is genuinely pathological — those want
+         * paging or chunking, which is the next protocol step.
+         *
+         * 64 KiB is the pragmatic middle: covers the realistic
+         * describe/list/call surface, costs ~192 KiB per machine
+         * across the three buffers (acc, recoveryScratch, encodeBuf),
+         * and on the guest stack-allocates without overflowing musl's
+         * 8 MiB default.
+         */
+        @JvmField val MAX_FRAME_BYTES: Int = 65536
 
         /** Scratch buffer size for draining serial TX per tick. */
         private const val DRAIN_CHUNK = 4096

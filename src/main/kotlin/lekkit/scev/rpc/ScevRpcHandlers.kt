@@ -131,6 +131,14 @@ object ScevRpcHandlers {
         }.getOrNull()
         m[MsgValue.of("cc_version")] = ccVersion?.let { MsgValue.of(it) } ?: MsgValue.NIL
 
+        // Wire-level limits the guest needs to know to budget its own
+        // request shapes. `frame_max_bytes` is the max plaintext (pre-
+        // COBS) MessagePack payload either side will accept; bigger
+        // responses come back as a FRAME_TOO_LARGE error instead of
+        // landing on the wire. Useful for guests that decide between
+        // paged or unpaged describe queries.
+        m[MsgValue.of("frame_max_bytes")] = MsgValue.of(ScevRpcManager.MAX_FRAME_BYTES.toLong())
+
         m[MsgValue.of("facing")] = runCatching {
             val state = MachineManager.getMachineState(machineUuid)
             val level = state?.level

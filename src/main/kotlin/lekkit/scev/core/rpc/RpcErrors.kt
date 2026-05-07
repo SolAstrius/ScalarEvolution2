@@ -46,4 +46,9 @@ object RpcErrors {
     /** Operation is recognised but not supported in the current
      *  configuration (e.g. yielding peripheral inside a `batch_par`). */
     const val UNSUPPORTED = "unsupported"
+
+    /** Response payload would exceed the wire frame cap. The guest
+     *  should retry with a narrower request (filtered describe, paged
+     *  list, …) or wait for chunked transfer support. */
+    const val FRAME_TOO_LARGE = "frame_too_large"
 }
