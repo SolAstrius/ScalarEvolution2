@@ -53,6 +53,10 @@ import java.lang.reflect.Field
  *    `"clear"`, `"status"`.
  */
 internal object ScevCCHandlers {
+    /** CC's package-private generic-peripheral wrapper class — matched by name. */
+    private const val GENERIC_PERIPHERAL_CLASS =
+        "dan200.computercraft.shared.peripheral.generic.GenericPeripheral"
+
     fun install(d: RpcDispatcher, computer: ScevCCComputer) {
         d.register(RpcProtocol.METHOD_LIST, RpcHandler { _ -> list(computer) })
         d.register(RpcProtocol.METHOD_METHODS, RpcHandler { args -> methods(computer, args) })
@@ -348,11 +352,21 @@ internal object ScevCCHandlers {
         // surface the shapes.
         val pluginSigs: Map<String, ScevPeripheralMethods.MethodSignature> =
             tweakiumPluginSignatures(peripheral)
+        // CC's own GenericPeripheral wraps capability-driven methods
+        // (InventoryMethods, FluidMethods, EnergyMethods, …) attached
+        // to a BlockEntity. Reflection on the peripheral class itself
+        // sees nothing — methods live on the source classes inside
+        // private SaturatedMethod entries. Reach in and recover their
+        // shapes.
+        val genericSigs: Map<String, ScevPeripheralMethods.MethodSignature> =
+            genericPeripheralSignatures(peripheral)
         // Names exposed via IDynamicPeripheral that aren't backed by an
         // @LuaFunction we can introspect — neither directly nor via the
-        // Tweakium reflection rescue.
+        // Tweakium / GenericPeripheral reflection rescues.
         val allNames = ScevPeripheralMethods.methodNames(peripheral)
-        val dynamicOnly = allNames.filter { it !in sigs && it !in pluginSigs }.sorted()
+        val dynamicOnly = allNames
+            .filter { it !in sigs && it !in pluginSigs && it !in genericSigs }
+            .sorted()
         val methodFilter = if (args.size > 1 && args[1].isString) args[1].asString() else null
 
         val base = linkedMapOf<MsgValue, MsgValue>()
@@ -369,6 +383,10 @@ internal object ScevCCHandlers {
                 return MsgValue.ofMap(base)
             }
             pluginSigs[methodFilter]?.let {
+                base[MsgValue.of("method")] = signatureMsg(it)
+                return MsgValue.ofMap(base)
+            }
+            genericSigs[methodFilter]?.let {
                 base[MsgValue.of("method")] = signatureMsg(it)
                 return MsgValue.ofMap(base)
             }
@@ -395,6 +413,9 @@ internal object ScevCCHandlers {
             // declaredBy (via signaturesForClass) — they slot naturally
             // into the same grouping shape, distinct from the parent
             // peripheral's own groups.
+            groups.computeIfAbsent(sig.declaredBy) { mutableListOf() }.add(sig)
+        }
+        for ((_, sig) in genericSigs) {
             groups.computeIfAbsent(sig.declaredBy) { mutableListOf() }.add(sig)
         }
         val groupsMsg = linkedMapOf<MsgValue, MsgValue>()
@@ -585,6 +606,78 @@ internal object ScevCCHandlers {
         } catch (_: Throwable) {}
         return out
     }
+
+    /**
+     * Recover signatures for CC's `GenericPeripheral` — the wrapper that
+     * presents capability-driven methods (`InventoryMethods.size` &c.)
+     * as a single `IDynamicPeripheral`. Reflection on the peripheral
+     * class itself gives nothing because the methods physically live on
+     * the per-capability source classes.
+     *
+     * Strategy:
+     *  1. Class-name match the host's `GenericPeripheral` (don't import —
+     *     it's a `shared.peripheral.generic` package-private impl).
+     *  2. Reach into the private `methods: List<SaturatedMethod>` field.
+     *  3. Each `SaturatedMethod` carries `name: String` + `target: Object`
+     *     (the source-class instance, e.g. `InventoryMethods`).
+     *  4. Look up the named `@LuaFunction` on `target.javaClass` via the
+     *     generic-source variant of our scanner (drops the first
+     *     non-injected param — the capability target CC injects).
+     *
+     * Any reflection failure → empty map; describe falls back to the
+     * existing dynamicMethods name-only listing.
+     */
+    private fun genericPeripheralSignatures(
+        peripheral: IPeripheral,
+    ): Map<String, ScevPeripheralMethods.MethodSignature> {
+        val out = linkedMapOf<String, ScevPeripheralMethods.MethodSignature>()
+        if (peripheral.javaClass.name != GENERIC_PERIPHERAL_CLASS) return out
+        try {
+            val methodsField = genericMethodsFieldFor(peripheral.javaClass) ?: return out
+            val saturated = methodsField.get(peripheral) as? List<*> ?: return out
+            for (sm in saturated) {
+                if (sm == null) continue
+                val accessors = saturatedAccessorsFor(sm.javaClass) ?: continue
+                val name = accessors.first.get(sm) as? String ?: continue
+                val target = accessors.second.get(sm) ?: continue
+                val sig = ScevPeripheralMethods.signaturesForGenericClass(target.javaClass)[name]
+                    ?: continue
+                out.putIfAbsent(name, sig)
+            }
+        } catch (_: Throwable) {
+            // CC internals shifted; degrade gracefully.
+        }
+        return out
+    }
+
+    private val genericMethodsFieldCache =
+        java.util.concurrent.ConcurrentHashMap<Class<*>, java.util.Optional<Field>>()
+
+    private fun genericMethodsFieldFor(cls: Class<*>): Field? =
+        genericMethodsFieldCache.computeIfAbsent(cls) { c ->
+            try {
+                val f = c.getDeclaredField("methods")
+                f.isAccessible = true
+                java.util.Optional.of(f)
+            } catch (_: NoSuchFieldException) {
+                java.util.Optional.empty()
+            }
+        }.orElse(null)
+
+    private val saturatedAccessorsCache =
+        java.util.concurrent.ConcurrentHashMap<Class<*>, java.util.Optional<Pair<Field, Field>>>()
+
+    /** Returns (nameField, targetField) on a SaturatedMethod class. */
+    private fun saturatedAccessorsFor(cls: Class<*>): Pair<Field, Field>? =
+        saturatedAccessorsCache.computeIfAbsent(cls) { c ->
+            try {
+                val n = c.getDeclaredField("name").apply { isAccessible = true }
+                val t = c.getDeclaredField("target").apply { isAccessible = true }
+                java.util.Optional.of(n to t)
+            } catch (_: NoSuchFieldException) {
+                java.util.Optional.empty()
+            }
+        }.orElse(null)
 
     private fun mergeSignatures(
         cls: Class<*>,

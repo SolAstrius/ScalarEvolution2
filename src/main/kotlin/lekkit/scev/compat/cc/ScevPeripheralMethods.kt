@@ -87,6 +87,18 @@ object ScevPeripheralMethods {
     private val tableCache: MutableMap<Class<*>, MethodTable> = ConcurrentHashMap()
 
     /**
+     * Signature-only cache for CC "generic source" classes
+     * (`InventoryMethods`, `FluidMethods`, `EnergyMethods`, third-party
+     * `GenericSource` impls). These are dispatched by CC itself via
+     * `IDynamicPeripheral.callMethod`, so we never need invokers — only
+     * the parameter/return shapes for `describe`. They differ from the
+     * regular path in one way: their first non-injected parameter is the
+     * capability target (`IItemHandler`, `IFluidHandler`, …), which CC
+     * injects from the BlockEntity and never appears on the Lua side.
+     */
+    private val genericSigCache: MutableMap<Class<*>, Map<String, MethodSignature>> = ConcurrentHashMap()
+
+    /**
      * Return the method table for the given peripheral's concrete class.
      * Handles [IDynamicPeripheral] by building a fresh table each time
      * (getMethodNames is per-instance by contract, though most impls
@@ -150,6 +162,23 @@ object ScevPeripheralMethods {
         val table = tableCache.computeIfAbsent(cls) { buildStatic(it) }
         val sorted = TreeMap<String, MethodSignature>()
         sorted.putAll(table.signatures)
+        return sorted
+    }
+
+    /**
+     * Signatures for a CC generic-source class — same scan as
+     * [signaturesForClass], but the first non-injected parameter is
+     * dropped because it's the capability target CC injects automatically
+     * (e.g. `IItemHandler` on `InventoryMethods.size(IItemHandler)`).
+     *
+     * No invoker is built; dispatch for these methods always goes through
+     * `IDynamicPeripheral.callMethod` on the host's `GenericPeripheral`.
+     */
+    @JvmStatic
+    fun signaturesForGenericClass(cls: Class<*>): Map<String, MethodSignature> {
+        val sigs = genericSigCache.computeIfAbsent(cls) { buildGenericSignatures(it) }
+        val sorted = TreeMap<String, MethodSignature>()
+        sorted.putAll(sigs)
         return sorted
     }
 
@@ -230,6 +259,7 @@ object ScevPeripheralMethods {
     @JvmStatic
     fun clearCacheForTests() {
         tableCache.clear()
+        genericSigCache.clear()
     }
 
     // ---------------- public introspection types ----------------
@@ -583,19 +613,65 @@ object ScevPeripheralMethods {
      * mirrors what a caller would actually pass in. Injected machinery
      * ([IComputerAccess], [ILuaContext], [IArguments]) is dropped —
      * it's not a caller-visible arg.
+     *
+     * When [dropFirstNonInjected] is true (CC generic-source methods),
+     * the first non-injected parameter is also dropped — that's the
+     * capability target CC injects from the BlockEntity.
      */
     private fun describeParams(
         paramTypes: Array<Class<*>>,
         genericTypes: Array<java.lang.reflect.Type>,
+        dropFirstNonInjected: Boolean = false,
     ): List<ParamSpec> {
         val out = ArrayList<ParamSpec>(paramTypes.size)
+        var dropped = !dropFirstNonInjected
         for (i in paramTypes.indices) {
             val raw = paramTypes[i]
             if (raw == IComputerAccess::class.java ||
                 raw == ILuaContext::class.java ||
                 raw == IArguments::class.java
             ) continue
+            if (!dropped) {
+                dropped = true
+                continue
+            }
             out += describeOneParam(raw, genericTypes[i])
+        }
+        return out
+    }
+
+    /**
+     * Scan a CC generic-source class for `@LuaFunction` methods and
+     * build signature-only entries — no invokers, first non-injected
+     * param dropped (the capability target).
+     */
+    private fun buildGenericSignatures(cls: Class<*>): Map<String, MethodSignature> {
+        val out = mutableMapOf<String, MethodSignature>()
+        for (m in cls.methods) {
+            val ann = m.getAnnotation(LuaFunction::class.java) ?: continue
+            // Skip the bridge methods javac generates for generic erasure
+            // (e.g. `pullItems(Object,...)` alongside the real
+            // `pullItems(IItemHandler,...)`). They carry the same
+            // annotation but their first param is `Object` — useless for
+            // describe and they'd duplicate the entry under a different
+            // shape.
+            if (m.isBridge || m.isSynthetic) continue
+            val params = describeParams(m.parameterTypes, m.genericParameterTypes, dropFirstNonInjected = true)
+            val aliases = ann.value.filter { it.isNotEmpty() }
+            val names = aliases.ifEmpty { listOf(m.name) }
+            val template = MethodSignature(
+                name = m.name,
+                aliases = aliases,
+                params = params,
+                returnShape = describeReturnShape(m.returnType),
+                mainThread = ann.mainThread,
+                unsafe = ann.unsafe,
+                declaredBy = m.declaringClass.simpleName,
+                acceptsRawArgs = m.parameterTypes.any { it == IArguments::class.java },
+            )
+            for (n in names) {
+                out.putIfAbsent(n, template.copy(name = n, aliases = aliases))
+            }
         }
         return out
     }
