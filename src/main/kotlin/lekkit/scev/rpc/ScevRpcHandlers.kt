@@ -5,6 +5,8 @@
  */
 package lekkit.scev.rpc
 
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import lekkit.scev.core.rpc.MsgValue
 import lekkit.scev.core.rpc.RpcErrors
 import lekkit.scev.core.rpc.RpcHandler
@@ -95,6 +97,12 @@ object ScevRpcHandlers {
         // without per-handler opt-in.
         d.register(RpcProtocol.METHOD_BATCH) { args ->
             batch(d, args)
+        }
+        // Parallel batch — same envelope, but items run concurrently.
+        // Per-peripheral mutex on the host serialises same-peer calls;
+        // cross-peer calls actually fan out. Always runs every item.
+        d.register(RpcProtocol.METHOD_BATCH_PAR) { args ->
+            batchPar(d, args)
         }
 
         d.register(RpcProtocol.METHOD_LOG) { args ->
@@ -303,7 +311,7 @@ object ScevRpcHandlers {
                 continue
             }
             val method = pair[0].asString()
-            if (method == RpcProtocol.METHOD_BATCH) {
+            if (method == RpcProtocol.METHOD_BATCH || method == RpcProtocol.METHOD_BATCH_PAR) {
                 out += batchEnvelope(
                     RpcFrame.ErrorInfo(RpcErrors.UNSUPPORTED, "nested batch not allowed"),
                     MsgValue.NIL,
@@ -327,6 +335,67 @@ object ScevRpcHandlers {
             if (resp.error != null && stopOnError) halted = true
         }
         return MsgValue.ofArray(out)
+    }
+
+    /**
+     * `batch_par(items: array, opts?: map) -> array`
+     *
+     * Same envelope as [batch], but items dispatch concurrently.
+     * Cross-peripheral fan-out happens for free (per-peer mutex on
+     * the host serialises same-peer calls — peripheral impls aren't
+     * reentrant — while different peers proceed in parallel).
+     *
+     * Every item always runs: there's no meaningful "halt early"
+     * once the fan-out is launched, so [batch]'s `stop_on_error`
+     * doesn't apply. Errors per-item still surface with their codes
+     * via the same `[err_or_nil, result]` envelope as `batch`.
+     *
+     * Nested `batch` / `batch_par` are refused with [RpcErrors.UNSUPPORTED]
+     * so the fan-out doesn't recurse into a thread-pool storm.
+     */
+    @JvmStatic
+    private suspend fun batchPar(d: RpcDispatcher, args: List<MsgValue>): MsgValue {
+        val items = requireArray(args, 0, "items")
+        return coroutineScope {
+            val deferred = items.mapIndexed { idx, item ->
+                async { dispatchOneBatchItem(d, idx, item) }
+            }
+            MsgValue.ofArray(deferred.map { it.await() })
+        }
+    }
+
+    /**
+     * Dispatch one item of a batch (ordered or parallel) and wrap
+     * the outcome in the standard `[err_or_nil, result]` envelope.
+     * Pulled out so [batch] and [batchPar] share the validation +
+     * dispatch path.
+     */
+    private suspend fun dispatchOneBatchItem(
+        d: RpcDispatcher,
+        idx: Int,
+        item: MsgValue,
+    ): MsgValue {
+        val pair = (item as? MsgValue.Arr)?.value
+        if (pair == null || pair.isEmpty() || !pair[0].isString) {
+            return batchEnvelope(
+                RpcFrame.ErrorInfo(RpcErrors.BAD_ARGS, "items[$idx] must be [method, args]"),
+                MsgValue.NIL,
+            )
+        }
+        val method = pair[0].asString()
+        if (method == RpcProtocol.METHOD_BATCH || method == RpcProtocol.METHOD_BATCH_PAR) {
+            return batchEnvelope(
+                RpcFrame.ErrorInfo(RpcErrors.UNSUPPORTED, "nested batch not allowed"),
+                MsgValue.NIL,
+            )
+        }
+        val itemArgs: List<MsgValue> = if (pair.size > 1 && pair[1].isArray) {
+            pair[1].asArray()
+        } else {
+            emptyList()
+        }
+        val resp = d.dispatch(RpcFrame.Request(0L, method, itemArgs))
+        return batchEnvelope(resp.error, resp.result)
     }
 
     private fun batchEnvelope(err: RpcFrame.ErrorInfo?, result: MsgValue): MsgValue {

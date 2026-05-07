@@ -53,6 +53,18 @@ object RpcProtocol {
      */
     const val METHOD_BATCH         = "batch"
 
+    /**
+     * Parallel batch — same envelope as [METHOD_BATCH], but items
+     * dispatch concurrently. Same-peripheral calls still serialise
+     * (per-peer mutex on the host); cross-peripheral calls run in
+     * parallel. Always runs every item — `stop_on_error` doesn't
+     * apply because there's no meaningful "halt" once the fan-out is
+     * launched. Useful for fan-out reads (`describe`, `inventory.list`
+     * across many chests) where round-trip count would otherwise
+     * dominate latency.
+     */
+    const val METHOD_BATCH_PAR     = "batch_par"
+
     // Error-info map keys. Kept private — callers should construct
     // [RpcFrame.ErrorInfo] directly and let encode/decode handle the
     // wire shape.

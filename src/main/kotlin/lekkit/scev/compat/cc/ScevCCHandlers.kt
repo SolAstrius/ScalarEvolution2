@@ -214,15 +214,24 @@ internal object ScevCCHandlers {
             }
         }
 
-        // Serialise per-computer dispatch so yielding methods don't
-        // race each other's event-queue draining. Matches real CC
-        // where one Lua coroutine processes one peripheral call at a
-        // time; concurrent RPC calls from the guest queue up.
+        // Per-peripheral mutex: same-peer calls serialise (peripheral
+        // implementations don't promise reentrancy and their internal
+        // state isn't always thread-safe), but cross-peer calls can
+        // proceed concurrently — `batch_par` relies on this for its
+        // fan-out parallelism. Remote-modem calls lock on the modem
+        // (which is what `callRemote` is dispatched against), so two
+        // remotes behind the same modem still serialise; CC's wired
+        // modem implementation isn't reentrant either.
+        //
+        // The per-computer [ScevCCComputer.dispatchMutex] still exists
+        // as a fallback for future yielding-method support — yielding
+        // calls coordinate event-queue draining at the computer scope,
+        // not at the peripheral scope.
         val startedAt = System.currentTimeMillis()
         val startNanos = System.nanoTime()
         val argsSummary = summarizeArgs(callArgs)
         val result = try {
-            val r = computer.dispatchMutex.withLock {
+            val r = computer.mutexFor(dispatchPeripheral).withLock {
                 ScevPeripheralMethods.dispatch(
                     dispatchPeripheral, computer, ctx, dispatchMethod, dispatchArgs,
                 )

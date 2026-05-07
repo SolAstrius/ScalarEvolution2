@@ -5,7 +5,13 @@
  */
 package lekkit.scev.test.rpc
 
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.yield
 import lekkit.scev.core.rpc.MsgValue
 import lekkit.scev.core.rpc.RpcErrors
 import lekkit.scev.core.rpc.RpcHandler
@@ -225,6 +231,126 @@ class SelfAndBatchTest {
             (errMap[MsgValue.of("code")] as MsgValue.Str).value,
         )
     }
+
+    /* ---------------- batch_par ---------------- */
+
+    @Test fun `batch_par returns one envelope per item in input order`() = runTest {
+        val d = freshDispatcher()
+        d.register("echo") { args -> args.getOrElse(0) { MsgValue.NIL } }
+
+        val rsp = d.dispatch(
+            RpcFrame.Request(
+                1, RpcProtocol.METHOD_BATCH_PAR,
+                listOf(
+                    MsgValue.ofArray(
+                        listOf(
+                            batchItem("echo", listOf(MsgValue.of("a"))),
+                            batchItem("echo", listOf(MsgValue.of("b"))),
+                            batchItem("echo", listOf(MsgValue.of("c"))),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        assertNull(rsp.error)
+        val results = rsp.result.asArray()
+        assertEquals(3, results.size)
+        for ((idx, expected) in listOf("a", "b", "c").withIndex()) {
+            assertEquals(expected, results[idx].asArray()[1].asString())
+        }
+    }
+
+    @Test fun `batch_par actually runs items concurrently`() = runTest {
+        val d = freshDispatcher()
+        // A handler that blocks on a shared gate until released. If
+        // batch_par actually fans out, every item enters the handler
+        // before any releases; if it ran sequentially the first
+        // suspended item would gate the rest at 1 entry.
+        val gate = CompletableDeferred<Unit>()
+        val started = java.util.concurrent.atomic.AtomicInteger(0)
+        d.register("wait") { _ ->
+            started.incrementAndGet()
+            gate.await()
+            MsgValue.of(1L)
+        }
+
+        val items = MsgValue.ofArray(
+            (0 until 3).map { batchItem("wait", emptyList()) },
+        )
+        // launch the batch in a sibling coroutine so this body can
+        // observe `started` rising as items enter the handler.
+        val deferred = async {
+            d.dispatch(RpcFrame.Request(1, RpcProtocol.METHOD_BATCH_PAR, listOf(items)))
+        }
+        // Yield until all three handlers have entered. Sequential
+        // execution would leave started == 1 indefinitely.
+        var spins = 0
+        while (started.get() < 3 && spins < 200) {
+            yield()
+            spins++
+        }
+        assertEquals(3, started.get(), "all three items should be running concurrently")
+        gate.complete(Unit)
+        val rsp = deferred.await()
+        assertNull(rsp.error)
+        assertEquals(3, rsp.result.asArray().size)
+    }
+
+    @Test fun `batch_par per-item errors don't take down siblings`() = runTest {
+        val d = freshDispatcher()
+        d.register("ok") { _ -> MsgValue.of("fine") }
+        d.register("nope") { _ ->
+            throw RpcHandler.RpcException("intentional", RpcErrors.BAD_ARGS)
+        }
+
+        val rsp = d.dispatch(
+            RpcFrame.Request(
+                1, RpcProtocol.METHOD_BATCH_PAR,
+                listOf(
+                    MsgValue.ofArray(
+                        listOf(
+                            batchItem("ok", emptyList()),
+                            batchItem("nope", emptyList()),
+                            batchItem("ok", emptyList()),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        val results = rsp.result.asArray()
+        assertEquals(3, results.size)
+        // Successful siblings survive even though item 1 errored.
+        assertEquals("fine", results[0].asArray()[1].asString())
+        assertEquals(
+            RpcErrors.BAD_ARGS,
+            (results[1].asArray()[0].asMap()[MsgValue.of("code")] as MsgValue.Str).value,
+        )
+        assertEquals("fine", results[2].asArray()[1].asString())
+    }
+
+    @Test fun `batch_par refuses nested batch and batch_par as unsupported`() = runTest {
+        val d = freshDispatcher()
+        for (nested in listOf(RpcProtocol.METHOD_BATCH, RpcProtocol.METHOD_BATCH_PAR)) {
+            val rsp = d.dispatch(
+                RpcFrame.Request(
+                    1, RpcProtocol.METHOD_BATCH_PAR,
+                    listOf(
+                        MsgValue.ofArray(
+                            listOf(batchItem(nested, listOf(MsgValue.ofArray(emptyList())))),
+                        ),
+                    ),
+                ),
+            )
+            assertEquals(
+                RpcErrors.UNSUPPORTED,
+                (results0(rsp).asMap()[MsgValue.of("code")] as MsgValue.Str).value,
+                "$nested rejected as nested",
+            )
+        }
+    }
+
+    private fun results0(rsp: RpcFrame.Response): MsgValue =
+        rsp.result.asArray()[0].asArray()[0]
 
     private fun batchItem(method: String, args: List<MsgValue>): MsgValue =
         MsgValue.ofArray(listOf(MsgValue.of(method), MsgValue.ofArray(args)))

@@ -63,13 +63,47 @@ class ScevCCComputer(private val machineUuid: UUID) : IComputerAccess {
     @Volatile private var rpcManager: ScevRpcManager? = null
 
     /**
-     * Serialises peripheral-method dispatches per computer. Real CC
-     * runs one Lua coroutine per computer; peripheral calls don't race
-     * each other. Matching that simplifies the event queue (single
-     * consumer) and avoids arguments-reentry pitfalls in peripherals
-     * whose [IDynamicPeripheral.callMethod] isn't reentrant.
+     * Per-computer mutex. Held by paths that need exclusive access to
+     * the computer's whole event/dispatch state — currently a fallback
+     * the call site reaches for when a finer-grained lock isn't
+     * available, and a future hook for yielding-method serialisation
+     * (real CC runs one Lua coroutine per computer; once we actually
+     * honour `MethodResult.yield`, the resumption needs the global
+     * lane to coordinate with `task_complete` event drainage).
+     *
+     * For the steady-state non-yielding case, [mutexFor] gives a
+     * per-peripheral mutex instead — same-peer calls still serialise
+     * (peripheral implementations don't promise reentrancy) but
+     * cross-peer calls run in parallel under [batch_par] without
+     * extra contention.
      */
     val dispatchMutex = Mutex()
+
+    /**
+     * Per-peripheral mutex map. Calls dispatched against the same
+     * [IPeripheral] serialise (their `@LuaFunction` methods don't
+     * promise reentrancy and their internal state isn't always
+     * thread-safe); calls to different peripherals run in parallel.
+     *
+     * IdentityHashMap-style key semantics — two distinct
+     * [IPeripheral] instances pointing at the same BlockEntity count
+     * as different peers, matching how CC's wiring presents them.
+     *
+     * Eviction happens in the tick-time detach path so a churn of
+     * attach/detach cycles doesn't slowly leak [Mutex] instances.
+     * On full machine [shutdown] the map is cleared outright.
+     */
+    private val peripheralMutexes: java.util.concurrent.ConcurrentMap<IPeripheral, Mutex> =
+        java.util.concurrent.ConcurrentHashMap()
+
+    /**
+     * Mutex for dispatching against [p]. Lazy-allocated; reused for
+     * the lifetime of the peripheral's attachment to this computer.
+     * Safe to call from any coroutine — [java.util.concurrent.ConcurrentHashMap.computeIfAbsent]
+     * handles the race.
+     */
+    fun mutexFor(p: IPeripheral): Mutex =
+        peripheralMutexes.computeIfAbsent(p) { Mutex() }
 
     /**
      * Event bus consumed by [awaitEvent] when a peripheral method
@@ -233,6 +267,11 @@ class ScevCCComputer(private val machineUuid: UUID) : IComputerAccess {
         for (p in toDetach) {
             runCatching { p.detach(this) }
             attachedPeripherals.remove(p)
+            // Drop the per-peripheral mutex along with the
+            // attachment so attach/detach churn doesn't leak Mutex
+            // instances. If `p` re-attaches later it'll get a fresh
+            // mutex from `mutexFor`.
+            peripheralMutexes.remove(p)
         }
         for (p in discovered) {
             if (attachedPeripherals.add(p)) runCatching { p.attach(this) }
@@ -299,6 +338,7 @@ class ScevCCComputer(private val machineUuid: UUID) : IComputerAccess {
         attachedPeripherals.clear()
         sideToPeripheral.clear()
         remoteToModem.clear()
+        peripheralMutexes.clear()
         claimedMounts.clear()
         rpcManager = null
     }
