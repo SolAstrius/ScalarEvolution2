@@ -67,13 +67,13 @@ internal object ScevCCHandlers {
         d.register(RpcProtocol.METHOD_SCHEMA, RpcHandler { args -> schema(computer, args) })
         d.register(RpcProtocol.METHOD_TYPE, RpcHandler { args -> type(computer, args) })
         d.register(RpcProtocol.METHOD_TRACE, RpcHandler { args -> trace(computer, args) })
-        // Subscribe/unsubscribe are no-ops today: events always flow to
-        // the guest via ScevRpcManager.sendEvent, and the guest filters
-        // client-side. Register real (no-op) handlers so the "CC not
-        // installed" stubs from ScevRpcHandlers don't respond with an
-        // error when CC actually IS installed.
-        d.register(RpcProtocol.METHOD_SUBSCRIBE, RpcHandler { _ -> MsgValue.NIL })
-        d.register(RpcProtocol.METHOD_UNSUBSCRIBE, RpcHandler { _ -> MsgValue.NIL })
+        // Real subscribe/unsubscribe — server-side allow-list filter
+        // applied at the wire boundary (queueEvent → sendEvent). The
+        // in-process event channel and the schema learner stay
+        // unfiltered, so yielding peripherals keep working regardless
+        // of what the guest has narrowed to.
+        d.register(RpcProtocol.METHOD_SUBSCRIBE, RpcHandler { args -> subscribe(computer, args) })
+        d.register(RpcProtocol.METHOD_UNSUBSCRIBE, RpcHandler { args -> unsubscribe(computer, args) })
     }
 
     /* ---------------- list ---------------- */
@@ -911,6 +911,68 @@ internal object ScevCCHandlers {
                 RpcErrors.BAD_ARGS,
             )
         }
+    }
+
+    /* ---------------- subscribe / unsubscribe ---------------- */
+
+    /**
+     * `subscribe(names: array<string>) -> {filter: nil | array<string>}`
+     *
+     *  - Empty `names` resets to wildcard (every event ships) — useful
+     *    after a previous narrowing call. Returns `{filter: nil}`.
+     *  - Non-empty `names` switches to whitelist mode (or extends the
+     *    existing whitelist) with those names. Returns the current
+     *    whitelist as an array.
+     *
+     *  Filter semantics live on [ScevCCComputer.subscribeEvents]; this
+     *  handler is the wire surface.
+     */
+    private fun subscribe(computer: ScevCCComputer, args: List<MsgValue>): MsgValue {
+        val names = collectNames(args)
+        val filter = computer.subscribeEvents(names)
+        return filterStateMsg(filter)
+    }
+
+    /**
+     * `unsubscribe(names: array<string>) -> {filter: nil | array<string>}`
+     *
+     *  - Empty `names` drops every event (filter becomes empty Set,
+     *    wire shipping stops entirely).
+     *  - Non-empty `names` removes those names from the active
+     *    whitelist; if no filter was active (wildcard), it's a no-op.
+     *
+     *  Returns the resulting filter state.
+     */
+    private fun unsubscribe(computer: ScevCCComputer, args: List<MsgValue>): MsgValue {
+        val names = collectNames(args)
+        val filter = computer.unsubscribeEvents(names)
+        return filterStateMsg(filter)
+    }
+
+    /**
+     * Pull a flat list of event names from RPC args. Accepts either
+     *   subscribe(["a", "b", ...])     (single array arg)
+     * or
+     *   subscribe("a", "b", ...)       (variadic positional args)
+     * — guests in different languages tend to reach for one or the
+     * other; tolerating both keeps the surface friendly.
+     */
+    private fun collectNames(args: List<MsgValue>): List<String> {
+        if (args.isEmpty()) return emptyList()
+        if (args.size == 1 && args[0].isArray) {
+            return args[0].asArray().mapNotNull { (it as? MsgValue.Str)?.value }
+        }
+        return args.mapNotNull { (it as? MsgValue.Str)?.value }
+    }
+
+    private fun filterStateMsg(filter: Set<String>?): MsgValue {
+        val out = linkedMapOf<MsgValue, MsgValue>()
+        out[MsgValue.of("filter")] = if (filter == null) {
+            MsgValue.NIL
+        } else {
+            MsgValue.ofArray(filter.toList().sorted().map { MsgValue.of(it) })
+        }
+        return MsgValue.ofMap(out)
     }
 
     /* ---------------- helpers ---------------- */

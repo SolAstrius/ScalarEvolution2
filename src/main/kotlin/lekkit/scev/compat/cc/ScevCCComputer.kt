@@ -116,6 +116,71 @@ class ScevCCComputer(private val machineUuid: UUID) : IComputerAccess {
      */
     private val eventChannel = Channel<Event>(Channel.UNLIMITED)
 
+    /**
+     * Server-side event subscription filter.
+     *
+     *  - `null` (default) — wildcard: every event ships to the guest.
+     *  - non-null [Set] — whitelist: only events whose name is in
+     *    the set ship. An empty set means no events ship at all.
+     *
+     * Mutated through [subscribeEvents] / [unsubscribeEvents] which
+     * publish a fresh immutable [Set]; readers in the hot path check
+     * the volatile reference. Internal event paths
+     * ([eventChannel], [observeEvent]) are unfiltered — yielding-
+     * peripheral resumption + the schema learner always see the full
+     * stream so guest filtering doesn't break host-side semantics.
+     */
+    @Volatile private var eventFilter: Set<String>? = null
+
+    /** Snapshot of the current filter for `self` / introspection. */
+    fun eventFilterSnapshot(): Set<String>? = eventFilter
+
+    /**
+     * Replace the active filter according to `subscribe` semantics:
+     *  - empty `names` → reset to wildcard.
+     *  - non-empty → if no filter active, start a fresh whitelist
+     *    with those names; otherwise add them to the existing one.
+     * Returns the resulting filter state (null for wildcard, else the
+     * whitelist as an immutable [Set]).
+     */
+    fun subscribeEvents(names: Collection<String>): Set<String>? {
+        if (names.isEmpty()) {
+            eventFilter = null
+            return null
+        }
+        val current = eventFilter
+        val next = if (current == null) names.toSet() else (current + names)
+        eventFilter = next
+        return next
+    }
+
+    /**
+     * Replace the active filter according to `unsubscribe` semantics:
+     *  - empty `names` → drop everything (filter becomes empty Set).
+     *  - non-empty → if no filter active, no-op (was wildcard, still
+     *    wildcard); otherwise remove the named events from the
+     *    whitelist. The whitelist may end up empty, in which case the
+     *    guest stops receiving events entirely.
+     * Returns the resulting filter state.
+     */
+    fun unsubscribeEvents(names: Collection<String>): Set<String>? {
+        if (names.isEmpty()) {
+            val empty = emptySet<String>()
+            eventFilter = empty
+            return empty
+        }
+        val current = eventFilter ?: return null
+        val next = current - names.toSet()
+        eventFilter = next
+        return next
+    }
+
+    /** True when the named event should ship to the guest. */
+    private fun shouldShipEvent(name: String): Boolean {
+        val f = eventFilter ?: return true
+        return name in f
+    }
+
     /** One event as seen by a suspending [awaitEvent] call. */
     data class Event(val name: String, val args: List<Any?>)
 
@@ -402,12 +467,18 @@ class ScevCCComputer(private val machineUuid: UUID) : IComputerAccess {
      * the peripheral thread that called `queueEvent`.
      */
     override fun queueEvent(event: String, vararg arguments: Any?) {
-        val mgr = rpcManager ?: ScevRpcManager.get(machineUuid)?.also { rpcManager = it }
-        if (mgr != null) {
-            val args = buildList<MsgValue>(arguments.size) {
-                arguments.forEach { add(javaObjectToMsg(it)) }
+        // Filter only the wire-bound side: the in-process eventChannel
+        // (yielding peripherals waiting on pullEvent) and the schema
+        // learner always see every event so host-side semantics don't
+        // break when a guest narrows its subscription.
+        if (shouldShipEvent(event)) {
+            val mgr = rpcManager ?: ScevRpcManager.get(machineUuid)?.also { rpcManager = it }
+            if (mgr != null) {
+                val args = buildList<MsgValue>(arguments.size) {
+                    arguments.forEach { add(javaObjectToMsg(it)) }
+                }
+                mgr.sendEvent(RpcFrame.event(event, args))
             }
-            mgr.sendEvent(RpcFrame.event(event, args))
         }
         eventChannel.trySend(Event(event, arguments.toList()))
         observeEvent(event, arguments.toList())

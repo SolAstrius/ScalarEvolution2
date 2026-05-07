@@ -56,6 +56,13 @@ object ScevRpcHandlers {
         MsgValue.of("chunked_transfer") to MsgValue.of(true),
         MsgValue.of("frame_too_large_signal") to MsgValue.of(true),
         MsgValue.of("cooked_mode_recovery") to MsgValue.of(true),
+        MsgValue.of("batch") to MsgValue.of(true),
+        MsgValue.of("batch_par") to MsgValue.of(true),
+        // Server-side event filtering via subscribe/unsubscribe.
+        // Pre-this-bump hosts had the methods registered but they
+        // were no-ops; clients can branch on this flag to avoid
+        // doing redundant client-side filtering.
+        MsgValue.of("event_subscriptions") to MsgValue.of(true),
     )
 
     /** Wire-level numbers the guest needs to budget its own traffic. */
