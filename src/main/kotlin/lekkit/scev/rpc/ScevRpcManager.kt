@@ -137,6 +137,40 @@ class ScevRpcManager private constructor(
      */
     internal val chunkStore = ChunkStore(machineUuid)
 
+    /**
+     * Currently-running request handlers keyed by guest request id.
+     * Populated by [handleIncoming]'s Request branch when a coroutine
+     * launches; cleared when it completes (success, failure, or
+     * cancellation). [cancelRequest] looks up and cancels by id —
+     * useful for guests that timed out client-side and want to free
+     * the host's coroutine instead of letting it run to completion.
+     *
+     * Idempotent against unknown ids (returns false): cancellation is
+     * best-effort, and the natural race "request completed between
+     * the guest deciding to cancel and the host processing the
+     * cancel" should be a no-op, not an error.
+     */
+    private val inflight: java.util.concurrent.ConcurrentMap<Long, kotlinx.coroutines.Job> =
+        java.util.concurrent.ConcurrentHashMap()
+
+    /**
+     * Cancel a still-running request handler. Returns true if there
+     * was an in-flight request to cancel, false otherwise (already
+     * completed, never existed, …). The cancelled coroutine produces
+     * no Response on the wire — guests that called this method have
+     * already given up on the original id, and a synthesized
+     * [lekkit.scev.core.rpc.RpcErrors.GENERIC] reply would just be
+     * noise.
+     */
+    fun cancelRequest(id: Long): Boolean {
+        val job = inflight.remove(id) ?: return false
+        job.cancel(kotlinx.coroutines.CancellationException("cancelled by guest request"))
+        return true
+    }
+
+    /** Snapshot of currently-running request ids (for diagnostics / tests). */
+    fun inflightRequestIds(): Set<Long> = inflight.keys.toSet()
+
     /* ---------------- counters ---------------- */
 
     private var requestsIn: Long = 0
@@ -334,11 +368,28 @@ class ScevRpcManager private constructor(
                 // in the serial RX ring before launch returns. Suspend
                 // points inside dispatch() resume via the dispatcher,
                 // which hops back to the server thread for writeFrame().
-                scope.launch {
-                    val response = _dispatcher.dispatch(frame)
-                    writeFrame(response)
-                    responsesOut++
+                //
+                // Capture the launched Job so [cancelRequest] can
+                // interrupt long-running handlers when the guest gives
+                // up on the call. Removed in the finally so completion
+                // races (handler done, then cancel arrives) leave the
+                // map empty as expected.
+                val reqId = frame.id
+                val job = scope.launch {
+                    try {
+                        val response = _dispatcher.dispatch(frame)
+                        writeFrame(response)
+                        responsesOut++
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        // Guest cancelled mid-flight. No Response — the
+                        // guest has already moved on. Re-throw so the
+                        // coroutine state is clean for the parent.
+                        throw e
+                    } finally {
+                        inflight.remove(reqId)
+                    }
                 }
+                inflight[reqId] = job
             }
             is RpcFrame.Response -> {
                 // Guest shouldn't be sending responses to us — we don't
@@ -505,6 +556,24 @@ class ScevRpcManager private constructor(
             }
             val mgr = ScevRpcManager(uuid, serial)
             ScevRpcHandlers.registerDefaults(mgr._dispatcher, uuid, mgr.chunkStore)
+            // Cancel is registered here rather than in registerDefaults
+            // because it touches per-manager inflight state (the
+            // request-id → Job map lives on the manager). Returns
+            // {cancelled: bool} so guests can tell race-on-completion
+            // (false; coroutine was already done) apart from real
+            // cancels (true).
+            mgr._dispatcher.register(RpcProtocol.METHOD_CANCEL) { args ->
+                val id = (args.getOrNull(0) as? MsgValue.Int)?.value
+                    ?: throw RpcHandler.RpcException(
+                        "expected integer argument: id",
+                        lekkit.scev.core.rpc.RpcErrors.BAD_ARGS,
+                    )
+                MsgValue.ofMap(
+                    linkedMapOf(
+                        MsgValue.of("cancelled") to MsgValue.of(mgr.cancelRequest(id)),
+                    )
+                )
+            }
             MANAGERS[uuid] = mgr
             for (listener in CREATE_LISTENERS) {
                 try {

@@ -65,6 +65,21 @@ object RpcProtocol {
      */
     const val METHOD_BATCH_PAR     = "batch_par"
 
+    /**
+     * Cancel an in-flight request by id. Args: `(id: int) -> bool`.
+     * Returns true if the host had a matching live coroutine and
+     * cancelled it; false if the id is unknown (already completed,
+     * never existed, …). Idempotent and race-tolerant: completing
+     * normally between the guest's decision to cancel and the host
+     * processing the cancel returns false rather than erroring.
+     *
+     * Cancelled handlers don't produce a Response — the guest is
+     * expected to have already moved on (typically because of a
+     * client-side timeout), so a synthesized error reply would just
+     * be noise.
+     */
+    const val METHOD_CANCEL        = "cancel"
+
     // Error-info map keys. Kept private — callers should construct
     // [RpcFrame.ErrorInfo] directly and let encode/decode handle the
     // wire shape.

@@ -63,6 +63,8 @@ object ScevRpcHandlers {
         // were no-ops; clients can branch on this flag to avoid
         // doing redundant client-side filtering.
         MsgValue.of("event_subscriptions") to MsgValue.of(true),
+        // In-flight request cancellation via METHOD_CANCEL.
+        MsgValue.of("cancel") to MsgValue.of(true),
     )
 
     /** Wire-level numbers the guest needs to budget its own traffic. */
