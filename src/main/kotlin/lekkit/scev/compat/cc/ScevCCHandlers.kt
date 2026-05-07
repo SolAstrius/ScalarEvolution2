@@ -118,7 +118,7 @@ internal object ScevCCHandlers {
 
         val typesList = mutableListOf<MsgValue>()
         try {
-            val ctx = ScevLuaContext()
+            val ctx = ScevLuaContext(computer)
             val args = ObjectArguments(ref.remoteName)
             val result = ScevPeripheralMethods.dispatch(
                 ref.modem, computer, ctx, "getTypeRemote", args,
@@ -151,7 +151,7 @@ internal object ScevCCHandlers {
             is ScevCCComputer.PeripheralRef.Remote -> {
                 // Route through the owning modem's getMethodsRemote.
                 // Returns Object[]{ List<String> methodNames } on success.
-                val ctx = ScevLuaContext()
+                val ctx = ScevLuaContext(computer)
                 val arguments = ObjectArguments(ref.remoteName)
                 val result = try {
                     ScevPeripheralMethods.dispatch(
@@ -187,7 +187,7 @@ internal object ScevCCHandlers {
         val ref = computer.resolvePeripheral(target)
             ?: throw RpcHandler.RpcException("no such peripheral: $target")
 
-        val ctx = ScevLuaContext()
+        val ctx = ScevLuaContext(computer)
         val javaArgs = callArgs.map { LuaValueConverter.toLua(it) }.toTypedArray()
 
         // Remote (modem-attached) peripherals get routed through the
@@ -432,7 +432,7 @@ internal object ScevCCHandlers {
         // hasn't been set up yet). Fall back to the method-name list from
         // getMethodsRemote and mark the response `dynamic` so the guest
         // can use the bad-arg probe trick instead of real signatures.
-        val ctx = ScevLuaContext()
+        val ctx = ScevLuaContext(computer)
         val arguments = ObjectArguments(ref.remoteName)
         val result = try {
             ScevPeripheralMethods.dispatch(
@@ -735,7 +735,7 @@ internal object ScevCCHandlers {
                 out[MsgValue.of("class")] = MsgValue.of(p::class.java.name)
             }
             is ScevCCComputer.PeripheralRef.Remote -> {
-                val ctx = ScevLuaContext()
+                val ctx = ScevLuaContext(computer)
                 val arguments = ObjectArguments(ref.remoteName)
                 val result = try {
                     ScevPeripheralMethods.dispatch(
