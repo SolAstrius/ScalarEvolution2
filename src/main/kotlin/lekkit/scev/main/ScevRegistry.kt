@@ -192,6 +192,7 @@ object ScevRegistry {
     @JvmField val BINDER          = ITEMS.register("binder",          Supplier { BinderItem(itemProps()) })
     @JvmField val INK_JAR         = ITEMS.register("ink_jar",         Supplier { InkJarItem(singleProps()) })
     @JvmField val RIBBON          = ITEMS.register("ribbon",          Supplier { RibbonItem(singleProps()) })
+    @JvmField val PRINTOUT        = ITEMS.register("printout",        Supplier { PrintoutItem(singleProps()) })
 
     // ---- Expansion cards ----------------------------------------------------
     @JvmField val SERIAL_PORT_CARD = ITEMS.register("serial_port_card", Supplier { SerialPortCardItem(singleProps()) })
@@ -348,6 +349,13 @@ object ScevRegistry {
                     output.accept(BINDER.get())
                     output.accept(INK_JAR.get())
                     output.accept(RIBBON.get())
+                    // Sample printout populated with a debug bitmap so
+                    // creative players can drop one into a frame and
+                    // verify the renderer end-to-end without needing
+                    // the printer block. Real (printed) printouts come
+                    // out of the printer's out-tray with content set
+                    // by the ESC/P driver.
+                    output.accept(samplePrintoutStack())
 
                     // Section 3: Expansion cards.
                     output.accept(SERIAL_PORT_CARD.get())
@@ -400,5 +408,69 @@ object ScevRegistry {
         CREATIVE_MODE_TABS.register(modBus);
         // Recipe types + serializers for ProcessingMachineBlockEntity.
         lekkit.scev.recipe.MachineRecipes.register(modBus);
+    }
+
+    /**
+     * Build a creative-mode demo printout: 192×256, single page,
+     * with a thin border, a centred filled circle (palette index
+     * 1 / ink), and a small color-bar at the bottom showing
+     * palette indices 1..4. Enough to verify pixel layout, color
+     * palette, and per-context rendering without needing a live
+     * printer block.
+     *
+     * Drawn programmatically so we don't ship a binary asset;
+     * cheap and runs once per creative-tab build.
+     */
+    private fun samplePrintoutStack(): ItemStack {
+        val w = 192
+        val h = 256
+        val stride = (w + 1) ushr 1
+        val pixels = ByteArray(stride * h)
+
+        fun put(x: Int, y: Int, idx: Int) {
+            if (x !in 0 until w || y !in 0 until h) return
+            val off = y * stride + (x ushr 1)
+            val byte = pixels[off].toInt() and 0xFF
+            val masked = if ((x and 1) == 0) (byte and 0xF0) or (idx and 0x0F)
+                         else (byte and 0x0F) or ((idx and 0x0F) shl 4)
+            pixels[off] = masked.toByte()
+        }
+
+        // Page border (1 = ink).
+        for (x in 0 until w) { put(x, 0, 1); put(x, h - 1, 1) }
+        for (y in 0 until h) { put(0, y, 1); put(w - 1, y, 1) }
+
+        // Centred filled disc. Drawn just inside the border;
+        // radius leaves room for the palette bar at the bottom.
+        val cx = w / 2
+        val cy = (h - 32) / 2
+        val r = minOf(cx, cy) - 12
+        val r2 = r * r
+        for (y in (cy - r) until (cy + r)) {
+            val dy = y - cy
+            val dy2 = dy * dy
+            for (x in (cx - r) until (cx + r)) {
+                val dx = x - cx
+                if (dx * dx + dy2 <= r2) put(x, y, 1)
+            }
+        }
+
+        // Bottom palette bar (4 swatches, indices 1..4) so we can
+        // visually confirm the palette pipeline is wired even
+        // before the printer driver uses any of these.
+        val barY0 = h - 28
+        val barY1 = h - 8
+        val swatchW = (w - 16) / 4
+        for (i in 0 until 4) {
+            val x0 = 8 + i * swatchW
+            val x1 = if (i == 3) w - 8 else x0 + swatchW - 2
+            for (y in barY0 until barY1) for (x in x0 until x1) put(x, y, i + 1)
+        }
+
+        val printout = Printout(w, h, 1, "Sample Printout",
+            Printout.MONO_PALETTE.copyOf(), pixels)
+        val stack = ItemStack(PRINTOUT.get())
+        stack.set(ScevDataComponents.PRINTOUT_CONTENT.get(), printout)
+        return stack
     }
 }

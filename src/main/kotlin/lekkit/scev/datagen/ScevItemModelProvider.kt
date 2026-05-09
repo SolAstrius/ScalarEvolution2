@@ -78,6 +78,12 @@ class ScevItemModelProvider(
         vanillaTextured(ScevRegistry.RTC_CARD,            "scev:item/rtc_module")
         vanillaTextured(ScevRegistry.GPIO_EXPANSION_CARD, "scev:item/gpio_card")
 
+        // Printout — placeholder icon (vanilla paper); the BEWLR
+        // overrides the visual with the page bitmap in every display
+        // context, but the JSON model's `display` block is still what
+        // drives per-context positioning, so we need it registered.
+        vanillaTextured(ScevRegistry.PRINTOUT,            "minecraft:item/paper")
+
         // Handhelds — placeholder model reuses motherboard2 sprite (closest
         // visual match to a "computer in your hand"). Real chassis model
         // (3D, with a screen face) lands later; the BEWLR overlays the

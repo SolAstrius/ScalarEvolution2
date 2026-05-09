@@ -7,7 +7,9 @@ package lekkit.scev.mixin.handheld;
 
 import com.mojang.blaze3d.vertex.PoseStack;
 import lekkit.scev.client.render.item.HandheldFirstPersonRenderer;
+import lekkit.scev.client.render.item.PrintoutFirstPersonRenderer;
 import lekkit.scev.items.IHandheldComputer;
+import lekkit.scev.items.PrintoutItem;
 import net.minecraft.client.player.AbstractClientPlayer;
 import net.minecraft.client.renderer.ItemInHandRenderer;
 import net.minecraft.client.renderer.MultiBufferSource;
@@ -68,24 +70,46 @@ public abstract class ItemInHandRendererMixin {
         CallbackInfo ci
     ) {
         if (player.isScoping()) return;
-        if (!(stack.getItem() instanceof IHandheldComputer)) return;
 
         boolean isMain = hand == InteractionHand.MAIN_HAND;
         HumanoidArm arm = isMain ? player.getMainArm() : player.getMainArm().getOpposite();
+        boolean twoHanded = isMain && this.offHandItem.isEmpty();
 
-        poseStack.pushPose();
-        if (isMain && this.offHandItem.isEmpty()) {
-            HandheldFirstPersonRenderer.renderTwoHanded(
-                stack, pitch, swingProgress, equipProgress,
-                poseStack, buffers, packedLight
-            );
-        } else {
-            HandheldFirstPersonRenderer.renderOneHanded(
-                stack, equipProgress, arm, swingProgress,
-                poseStack, buffers, packedLight
-            );
+        if (stack.getItem() instanceof IHandheldComputer) {
+            poseStack.pushPose();
+            if (twoHanded) {
+                HandheldFirstPersonRenderer.renderTwoHanded(
+                    stack, pitch, swingProgress, equipProgress,
+                    poseStack, buffers, packedLight
+                );
+            } else {
+                HandheldFirstPersonRenderer.renderOneHanded(
+                    stack, equipProgress, arm, swingProgress,
+                    poseStack, buffers, packedLight
+                );
+            }
+            poseStack.popPose();
+            ci.cancel();
+        } else if (stack.getItem() instanceof PrintoutItem) {
+            // Printouts get the same map-like raised pose. Distinct
+            // dispatch from handhelds so each renderer can evolve
+            // independently — chassis vs. flat-page rendering is
+            // different enough downstream that a shared draw-callback
+            // would be more complexity than it saves.
+            poseStack.pushPose();
+            if (twoHanded) {
+                PrintoutFirstPersonRenderer.renderTwoHanded(
+                    stack, pitch, swingProgress, equipProgress,
+                    poseStack, buffers, packedLight
+                );
+            } else {
+                PrintoutFirstPersonRenderer.renderOneHanded(
+                    stack, equipProgress, arm, swingProgress,
+                    poseStack, buffers, packedLight
+                );
+            }
+            poseStack.popPose();
+            ci.cancel();
         }
-        poseStack.popPose();
-        ci.cancel();
     }
 }

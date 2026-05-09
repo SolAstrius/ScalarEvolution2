@@ -8,6 +8,7 @@ package lekkit.scev.client.render
 import lekkit.scev.client.render.blockentity.TinkerpadRenderer
 import lekkit.scev.client.render.blockentity.TerminalRenderer
 import lekkit.scev.client.render.item.HandheldItemRenderer
+import lekkit.scev.client.render.item.PrintoutItemRenderer
 import lekkit.scev.client.screen.ComputerCaseScreen
 import lekkit.scev.client.screen.FlashProgrammerScreen
 import lekkit.scev.client.screen.MachineScreen
@@ -69,5 +70,10 @@ object ScevRenderers {
         // mixin into vanilla `ItemInHandRenderer` can't reach the BEWLR's
         // per-instance profile field, so it looks up by item id here.
         HandheldItemRenderer.registerProfile(ScevRegistry.POCKET_COMPUTER.get(), pocketProfile)
+
+        // Printout — page bitmap rendered into the placeholder
+        // item-generated model's display-transform space, then drawn
+        // as a single textured quad. See PrintoutItemRenderer kdoc.
+        e.registerItem(PrintoutItemRenderer(), ScevRegistry.PRINTOUT.get())
     }
 }

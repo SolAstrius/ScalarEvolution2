@@ -8,6 +8,7 @@ package lekkit.scev.main
 import java.util.UUID
 import lekkit.scev.items.FirmwareBlob
 import lekkit.scev.items.FlashFirmware
+import lekkit.scev.items.Printout
 import net.minecraft.core.UUIDUtil
 import net.minecraft.core.component.DataComponentType
 import net.minecraft.core.registries.Registries
@@ -182,6 +183,26 @@ object ScevDataComponents {
     const val PAPER_ROLL_INITIAL_LINES: Int = 500
     /** Characters per fresh ribbon. */
     const val RIBBON_INITIAL_INK: Int = 8000
+
+    /* ---------------- Printout payload ---------------- */
+
+    /**
+     * Static bitmap content carried by a
+     * [lekkit.scev.items.PrintoutItem]. Burned in at print time and
+     * never mutated afterwards — unlike framebuffer content (which
+     * lives outside the item), the printout's pixels travel inside
+     * the ItemStack via this component, persist through chest
+     * storage, hopper transit, and item-frame display, and replicate
+     * to every client that sees the stack.
+     *
+     * 4bpp palette-indexed; see [Printout] for the wire format.
+     */
+    @JvmField
+    val PRINTOUT_CONTENT: DeferredHolder<DataComponentType<*>, DataComponentType<Printout>> =
+        DATA_COMPONENTS.registerComponentType("printout_content") { b ->
+            b.persistent(Printout.CODEC)
+             .networkSynchronized(Printout.STREAM_CODEC.cast())
+        }
 
     @JvmStatic
     fun register(modBus: IEventBus) {

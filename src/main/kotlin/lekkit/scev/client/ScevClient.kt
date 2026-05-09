@@ -5,6 +5,8 @@
  */
 package lekkit.scev.client
 
+import lekkit.scev.client.render.item.PrintoutFrameHook
+import lekkit.scev.client.render.item.PrintoutItemRenderer
 import lekkit.scev.client.sections.ScevSectionManager
 import lekkit.scev.client.terminal.MltermNative
 import lekkit.scev.server.MachineManager
@@ -32,6 +34,17 @@ object ScevClient {
         NeoForge.EVENT_BUS.addListener(ScevClient::onClientTick)
         // DisplayManager's per-tick A/V-sync video jitter buffer.
         NeoForge.EVENT_BUS.addListener(DisplayManager::onClientTick)
+        // Override item-frame rendering for printouts. Subscription
+        // goes through a Java helper class with a `@SubscribeEvent`
+        // method — Kotlin lambda subscriptions for this bus turned
+        // out unreliable (see PrintoutFrameHook for the why).
+        com.mojang.logging.LogUtils.getLogger().info(
+            "[scev] registering PrintoutFrameHook on NeoForge.EVENT_BUS"
+        )
+        NeoForge.EVENT_BUS.register(PrintoutFrameHook::class.java)
+        com.mojang.logging.LogUtils.getLogger().info(
+            "[scev] PrintoutFrameHook registered"
+        )
         // Eagerly extract + load libscev_term so the first VT100
         // open isn't blocked behind a 3 MiB jar-resource extract +
         // System.load. Failure logs and proceeds — the GUI throws
