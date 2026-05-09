@@ -664,9 +664,66 @@ public final class RvvmMachineBackend implements MachineBackend {
     }
 
     private static final class RvvmSerial implements SerialDevice {
+        private static final java.util.concurrent.atomic.AtomicInteger NEXT_ID =
+            new java.util.concurrent.atomic.AtomicInteger(0);
+
         private final NS16550ABridge inner;
-        RvvmSerial(NS16550ABridge inner) { this.inner = inner; }
-        @Override public int pollTx(byte[] buf) { return inner.poll(buf); }
-        @Override public int feedRx(byte[] buf) { return inner.feed(buf); }
+        private final int id;
+        private final java.io.OutputStream log;
+
+        RvvmSerial(NS16550ABridge inner) {
+            this.inner = inner;
+            this.id = NEXT_ID.getAndIncrement();
+            java.io.OutputStream s = null;
+            try {
+                s = new java.io.BufferedOutputStream(
+                    new java.io.FileOutputStream("/tmp/uart" + id + ".txt", true));
+            } catch (java.io.IOException e) {
+                LOG.warn("[scev-uart-tap] failed to open /tmp/uart{}.txt: {}", id, e.toString());
+            }
+            this.log = s;
+            if (this.log != null) {
+                writeLine("==== open id=" + id + " t=" + System.currentTimeMillis() + " ====\n");
+            }
+        }
+
+        @Override public int pollTx(byte[] buf) {
+            int n = inner.poll(buf);
+            if (n > 0) dump("OUT", buf, n);
+            return n;
+        }
+
+        @Override public int feedRx(byte[] buf) {
+            int n = inner.feed(buf);
+            if (n > 0) dump("IN ", buf, n);
+            return n;
+        }
+
+        private void dump(String dir, byte[] buf, int n) {
+            if (log == null) return;
+            StringBuilder sb = new StringBuilder(16 + n * 3 + n + 8);
+            sb.append(dir).append(' ').append(n).append(": ");
+            for (int i = 0; i < n; i++) {
+                int v = buf[i] & 0xFF;
+                sb.append(HEX[v >>> 4]).append(HEX[v & 0xF]).append(' ');
+            }
+            sb.append(' ').append('|');
+            for (int i = 0; i < n; i++) {
+                int v = buf[i] & 0xFF;
+                sb.append((v >= 0x20 && v < 0x7F) ? (char) v : '.');
+            }
+            sb.append("|\n");
+            writeLine(sb.toString());
+        }
+
+        private synchronized void writeLine(String s) {
+            try {
+                log.write(s.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                log.flush();
+            } catch (java.io.IOException ignored) {
+            }
+        }
+
+        private static final char[] HEX = "0123456789abcdef".toCharArray();
     }
 }
