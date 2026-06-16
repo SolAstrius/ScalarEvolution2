@@ -892,6 +892,12 @@ tasks.register('buildMltermNative') {
     inputs.file(new File(jniSrcDir, 'scev_term_jni.c'))
     inputs.file(new File(jniSrcDir, 'scev_term.h'))
     inputs.file(new File(jniSrcDir, 'Makefile'))
+    inputs.file(new File(jniSrcDir, 'build-freetype.sh'))
+    inputs.dir(new File(jniSrcDir, 'jni_headers'))
+    // The vendored FreeType tarball is the sole external C dep; a version
+    // bump must rebuild the native. (Cross-target builds are CI's job, same
+    // as librvvm/libscev_h264 — this task only builds for the host.)
+    inputs.files(fileTree('vendor/freetype'))
     inputs.property('mltermRef', mltermRef)
     inputs.file(mltermSrcShaFile).withPropertyName('mltermSrcSha')
     outputs.file destFile
