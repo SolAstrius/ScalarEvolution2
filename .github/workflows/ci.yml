@@ -64,7 +64,12 @@ jobs:
             sed -i -e 's/console:3\.10/console/' \
                    -e 's/ -Wl[^ ]*--exclude-all-symbols//' Makefile
           fi
-          make lib USE_JNI=1 \
+          # USE_GUI=0: the mod drives librvvm headless over JNI — no native
+          # window. Dropping the GUI is required for the darwin cross-build
+          # (RVVM staging's pure-C Cocoa backend #includes CoreGraphics, and
+          # zig has no Apple SDK frameworks when cross-compiling from Linux);
+          # it's purely subtractive on linux/windows too.
+          make lib USE_JNI=1 USE_GUI=0 \
             OS=${{ matrix.target.os }} \
             ARCH=${{ matrix.target.arch }} \
             CC="zig cc -target ${{ matrix.target.triple }}" \
