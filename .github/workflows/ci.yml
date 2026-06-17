@@ -147,16 +147,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Windows is intentionally absent: mlterm's configure rejects
-        # --with-gui=fb on mingw, and the fb backend's event loop isn't
-        # ported to the win32 message pump yet. Tracked separately.
         # `host` is the autotools --host triple (config.sub-valid); it is
         # deliberately NOT the zig `triple` (config.sub rejects those).
         # `jni_dir` picks the JDK's own linux jni_md.h vs our vendored
-        # darwin copy (a Linux JDK ships no include/darwin).
+        # darwin/win32 copies (a Linux JDK ships only include/linux).
         target:
-          - { triple: x86_64-linux-gnu,   host: x86_64-linux-gnu,    classifier: linux-x86_64,  jni_dir: jdk,             outname: libscev_term.so    }
-          - { triple: aarch64-macos-none, host: aarch64-apple-darwin, classifier: macos-aarch64, jni_dir: vendored-darwin, outname: libscev_term.dylib }
+          - { triple: x86_64-linux-gnu,   host: x86_64-linux-gnu,    classifier: linux-x86_64,   jni_dir: jdk,             outname: libscev_term.so    }
+          - { triple: aarch64-macos-none, host: aarch64-apple-darwin, classifier: macos-aarch64,  jni_dir: vendored-darwin, outname: libscev_term.dylib }
+          - { triple: x86_64-windows-gnu, host: x86_64-w64-mingw32,   classifier: windows-x86_64, jni_dir: vendored-win32,  outname: scev_term.dll      }
     steps:
       - uses: actions/checkout@v4
       - uses: actions/checkout@v4
@@ -193,6 +191,7 @@ jobs:
           case "${{ matrix.target.jni_dir }}" in
             jdk)              JNI_PI="$JAVA_HOME/include/linux" ;;
             vendored-darwin)  JNI_PI="$GITHUB_WORKSPACE/native/mlterm-jni/jni_headers/darwin" ;;
+            vendored-win32)   JNI_PI="$GITHUB_WORKSPACE/native/mlterm-jni/jni_headers/win32" ;;
           esac
           make -C native/mlterm-jni -j$(nproc) \
             TARGET=${{ matrix.target.triple }} \
@@ -247,8 +246,6 @@ jobs:
         with:
           name: libscev_h264-windows-x86_64
           path: src/main/resources/natives/windows-x86_64
-      # libscev_term ships for linux + macOS only; Windows has no terminal
-      # native yet (see the natives-mlterm job comment).
       - name: Download libscev_term (linux)
         uses: actions/download-artifact@v4
         with:
@@ -259,6 +256,11 @@ jobs:
         with:
           name: libscev_term-macos-aarch64
           path: src/main/resources/natives/macos-aarch64
+      - name: Download libscev_term (Windows)
+        uses: actions/download-artifact@v4
+        with:
+          name: libscev_term-windows-x86_64
+          path: src/main/resources/natives/windows-x86_64
       - run: find src/main/resources/natives -type f
 
       # `-x build*Native` skips the local-only host rebuilds — the natives

@@ -65,6 +65,14 @@
 #include <sys/types.h>
 #include <time.h>
 #include <unistd.h>
+#ifdef _WIN32
+#include <direct.h> /* _mkdir */
+/* mingw lacks setenv()/2-arg mkdir(); map to the Win32 CRT equivalents. */
+#define setenv(k, v, ow) _putenv_s((k), (v))
+#define scev_mkdir(p) _mkdir(p)
+#else
+#define scev_mkdir(p) mkdir((p), 0755)
+#endif
 
 #include <main_loop.h>            /* not called, but headers needed */
 #include <ui_event_source.h>      /* ui_event_source_pump_once_nonblock */
@@ -356,7 +364,7 @@ int scev_term_init_once(const char *font_path) {
     setenv("HOME", tmp_home, 1);
     char ml_dir[1100];
     snprintf(ml_dir, sizeof(ml_dir), "%s/.mlterm", tmp_home);
-    mkdir(ml_dir, 0755);  /* ignore EEXIST */
+    scev_mkdir(ml_dir);  /* ignore EEXIST */
   }
 
   if (!vt_term_manager_init(MAX_TERMS / 32 + 1)) {

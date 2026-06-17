@@ -55,6 +55,15 @@ CONFIGURE_HOST := $(if $(HOST_TRIPLE),--host=$(HOST_TRIPLE),)
 # from colliding when more than one target is built from one tree.
 FT_TAG := $(if $(TARGET),$(TARGET),host)
 
+# Object-file extension. autotools/libtool name objects .obj on Windows
+# (OBJEXT=obj), .o elsewhere — matters for the loose main_loop/daemon
+# objects we pick up at link time (the .a archives are resolved by wildcard).
+ifneq (,$(findstring windows,$(TARGET)))
+  O := obj
+else
+  O := o
+endif
+
 # Target OS — drives the JNI header dir and the system link libs. Sniffed
 # from the triple when cross, from uname otherwise.
 ifeq ($(TARGET),)
@@ -223,8 +232,8 @@ CFLAGS := -O2 -fPIC -Wall \
 # make time with wildcard. Recursive (=) so paths resolve AFTER build-mlterm.
 find_lib = $(firstword $(wildcard $(1)/.libs/$(2) $(1)/$(2)))
 MLTERM_LIBS = \
-  $(MLTERM_SRC)/main/main_loop.o \
-  $(MLTERM_SRC)/main/daemon.o \
+  $(MLTERM_SRC)/main/main_loop.$(O) \
+  $(MLTERM_SRC)/main/daemon.$(O) \
   $(call find_lib,$(MLTERM_SRC)/uitoolkit,libuitoolkit.a) \
   $(call find_lib,$(MLTERM_SRC)/vtemu,libmlterm.a) \
   $(call find_lib,$(MLTERM_SRC)/vtemu,libmlterm_core.a) \
